@@ -1,0 +1,86 @@
+/*
+ * Copyright (c) 2025 Freqchip
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include <freq.h>
+#include <mem.h>
+#include <arm/armv8-m.dtsi>
+
+/ {
+	cpus {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		cpu0: cpu@0 {
+			compatible = "arm,cortex-m33";
+			clock-frequency = <DT_FREQ_M(24)>;
+			reg = <0>;
+			#address-cells = <1>;
+			#size-cells = <1>;
+		};
+	};
+
+	soc {
+        flash0: flash@8002000 {
+            compatible = "soc-nv-flash";
+            erase-block-size = <4096>;
+            write-block-size = <4>;
+            /* Flash size is specified in SOC/SIP dtsi */
+        };
+
+		pram: memory@1ffe0000 {
+			compatible = "mmio-sram";
+		};
+
+		sram: memory@20000000 {
+			compatible = "mmio-sram";
+		};
+
+		uart0: uart@50010000 {
+            compatible = "freqchip,fr-uart";
+            reg = <0x50010000 0x8000>;
+			interrupts = <20 2>;
+			status = "disabled";
+		};
+
+		uart1: uart@50018000 {
+            compatible = "freqchip,fr-uart";
+            reg = <0x50018000 0x8000>;
+			interrupts = <21 2>;
+			status = "disabled";
+		};
+
+		uart2: uart@50110000 {
+            compatible = "freqchip,fr-uart";
+            reg = <0x50110000 0x8000>;
+			interrupts = <22 2>;
+			status = "disabled";
+		};
+
+		uart3: uart@50118000 {
+            compatible = "freqchip,fr-uart";
+            reg = <0x50118000 0x8000>;
+			interrupts = <23 2>;
+			status = "disabled";
+		};
+
+		uart4: uart@50210000 {
+            compatible = "freqchip,fr-uart";
+            reg = <0x50210000 0x8000>;
+			interrupts = <24 2>;
+			status = "disabled";
+		};
+
+		/*pinctrl: pinctrl@e0050120 {
+			compatible = "freqchip,fr-pinctrl";
+			reg = <0xe0050120 0x28>;
+			status = "disable";
+		};*/
+	};
+};
+
+&nvic {
+	arm,num-irq-priority-bits = <3>;
+};

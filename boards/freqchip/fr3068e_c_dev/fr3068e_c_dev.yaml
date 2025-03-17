@@ -1,0 +1,13 @@
+# Copyright (c) 2025 Freqchip
+# SPDX-License-Identifier: Apache-2.0
+
+identifier: fr3068e_c_dev
+name: Freqchip FR3068E-C development board
+type: mcu
+arch: arm
+ram: 512
+flash: 2048
+toolchain:
+  - zephyr
+  - gnuarmemb
+vendor: freqchip

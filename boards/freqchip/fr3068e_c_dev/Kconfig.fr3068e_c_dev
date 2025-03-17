@@ -1,0 +1,5 @@
+# Copyright (c) 2025 Freqchip
+# SPDX-License-Identifier: Apache-2.0
+
+config BOARD_FR3068E_C_DEV
+	select SOC_FR3068E_C

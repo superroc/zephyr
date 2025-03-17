@@ -1,0 +1,11 @@
+# Copyright (c) 2024 Freqchip
+# SPDX-License-Identifier: Apache-2.0
+
+config SOC_FAMILY_FREQCHIP_FR
+	select HAS_FREQCHIP_DRIVERS
+
+if SOC_FAMILY_FREQCHIP_FR
+
+rsource "*/Kconfig"
+
+endif # SOC_FAMILY_FREQCHIP_FR

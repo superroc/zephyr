@@ -1,0 +1,6 @@
+family:
+  - name: freqchip_fr
+    series:
+      - name: fr30xx_c
+        socs:
+          - name: fr3068e_c

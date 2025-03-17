@@ -1,0 +1,6 @@
+board:
+  name: fr3068e_c_dev
+  full_name: FR3068E_C_DEV
+  vendor: freqchip
+  socs:
+    - name: fr3068e_c

@@ -30,6 +30,7 @@ zephyr_library_sources_ifdef(CONFIG_UART_EFINIX_SAPPIHIRE uart_efinix_sapphire.c
 zephyr_library_sources_ifdef(CONFIG_UART_EMUL uart_emul.c)
 zephyr_library_sources_ifdef(CONFIG_UART_ENE_KB1200 uart_ene_kb1200.c)
 zephyr_library_sources_ifdef(CONFIG_UART_ESP32 uart_esp32.c)
+zephyr_library_sources_ifdef(CONFIG_UART_FREQCHIP_FR uart_fr.c)
 zephyr_library_sources_ifdef(CONFIG_UART_GECKO uart_gecko.c)
 zephyr_library_sources_ifdef(CONFIG_UART_HOSTLINK uart_hostlink.c)
 zephyr_library_sources_ifdef(CONFIG_UART_IMX uart_imx.c)

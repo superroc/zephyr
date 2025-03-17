@@ -172,6 +172,12 @@ manifest:
       path: modules/hal/ethos_u
       groups:
         - hal
+    - name: hal_freqchip
+      revision: ignore
+      path: modules/hal/freqchip
+      url: file:///dev/null
+      groups:
+        - hal
     - name: hal_gigadevice
       revision: 2994b7dde8b0b0fa9b9c0ccb13474b6a486cddc3
       path: modules/hal/gigadevice
@@ -364,7 +370,7 @@ manifest:
       revision: 9b07780aca6fb21f82a241ba386ad9b379809337
       path: modules/lib/zcbor
   # zephyr-keep-sorted-stop
-
+  
   self:
     path: zephyr
     west-commands: scripts/west-commands.yml

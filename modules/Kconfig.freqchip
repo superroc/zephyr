@@ -1,0 +1,7 @@
+# Copyright (c) 2025 Freqchip
+# SPDX-License-Identifier: Apache-2.0
+
+config HAS_FREQCHIP_DRIVERS
+	bool "Freqchip Drivers"
+	help
+	  This option enables Freqchip Drivers APIs.
