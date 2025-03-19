@@ -16,6 +16,7 @@
 struct fr_uart_config {
 	uint32_t reg;
 	uint16_t clkid;
+	bool hw_flow;
 	// struct reset_dt_spec reset;
 	// const struct pinctrl_dev_config *pcfg;
 	uint32_t parity;
@@ -32,6 +33,8 @@ struct fr_uart_data {
 	uart_irq_callback_user_data_t user_cb;
 	void *user_data;
 #endif /* CONFIG_UART_INTERRUPT_DRIVEN */
+
+	bool tx_int_generated;
 };
 
 #ifdef CONFIG_UART_INTERRUPT_DRIVEN
@@ -46,7 +49,8 @@ static void uart_fr_isr(const struct device *dev)
 		case INT_INDEX_NONE:
 			break;
 		case INT_INDEX_TXE:
-			__UART_INT_TXE_DISABLE(uart->UARTx);
+		    __UART_INT_TXE_DISABLE(uart->UARTx);
+			data->tx_int_generated = true;
 			break;
 		case INT_INDEX_RX:
 			break;
@@ -57,9 +61,6 @@ static void uart_fr_isr(const struct device *dev)
 		default:
 			break;
 	}
-
-	*(volatile uint32_t *)0x1ffff000 = data->user_cb;
-	*(volatile uint32_t *)0x1ffff004 = data->user_data;
 
 	if (data->user_cb) {
 		data->user_cb(dev, data->user_data);
@@ -91,6 +92,11 @@ static int uart_fr_init(const struct device *dev)
     uart->TxCpltCallback  = NULL;
     uart->RxCpltCallback  = NULL;
     uart_init(uart);
+
+	if (config->hw_flow) {
+		__UART_AUTO_FLOW_CONTROL_ENABLE(uart->UARTx);
+    	__UART_RTS_ACTIVE(uart->UARTx);
+	}
 
 #ifdef CONFIG_UART_INTERRUPT_DRIVEN
 	config->irq_config_func(dev);
@@ -136,7 +142,7 @@ int uart_fr_fifo_fill(const struct device *dev, const uint8_t *tx_data,
 	uart_transmit(uart, tx_data, len);
 	__UART_INT_TXE_ENABLE_FE(uart->UARTx);
 	
-	return 0;
+	return len;
 }
 
 int uart_fr_fifo_read(const struct device *dev, uint8_t *rx_data,
@@ -222,8 +228,11 @@ int uart_fr_irq_is_pending(const struct device *dev)
 {
 	struct fr_uart_data *data = dev->data;
 	UART_HandleTypeDef *uart = &data->uart;
+	bool tx_pending = (data->tx_int_generated == true);
+
+	data->tx_int_generated = false;
 	
-	return __UART_INT_GET_ID(uart->UARTx) != INT_INDEX_NONE;
+	return (__UART_INT_GET_ID(uart->UARTx) != INT_INDEX_NONE) || tx_pending;
 }
 
 int uart_fr_irq_update(const struct device *dev)
@@ -232,7 +241,7 @@ int uart_fr_irq_update(const struct device *dev)
 	UART_HandleTypeDef *uart = &data->uart;
 	volatile REG_USR_t usr_status = uart->UARTx->USR;
 
-	return 0;
+	return 1;
 }
 
 void uart_fr_irq_callback_set(const struct device *dev,
@@ -294,6 +303,7 @@ static DEVICE_API(uart, uart_fr_driver_api) = {
 	static const struct fr_uart_config uart_fr_config_##n = {		\
 		.reg = DT_INST_REG_ADDR(n),					\
 		.parity = DT_INST_ENUM_IDX(n, parity),				\
+		.hw_flow = DT_INST_PROP(n, hw_flow_control),		\
 		 FR_UART_IRQ_HANDLER_FUNC_INIT(n)				\
 	};									\
 	DEVICE_DT_INST_DEFINE(n, uart_fr_init,				\
