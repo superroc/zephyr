@@ -1,0 +1,5 @@
+description: Freqchip FR30xx Flash Controller
+
+compatible: "freqchip,fr-flash-controller"
+
+include: flash-controller.yaml

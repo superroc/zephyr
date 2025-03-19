@@ -1,0 +1,12 @@
+# Copyright (c) 2025 Freqchip
+# SPDX-License-Identifier: Apache-2.0
+
+config SOC_FLASH_FREQCHIP_FR
+	bool "Freqchip FR30xx flash driver"
+	default y
+	depends on DT_HAS_FREQCHIP_FR_FLASH_CONTROLLER_ENABLED
+	select FLASH_HAS_PAGE_LAYOUT
+	select FLASH_HAS_DRIVER_ENABLED
+	select FLASH_HAS_EXPLICIT_ERASE
+	help
+	  Enables Freqchip FR30xx flash driver.

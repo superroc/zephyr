@@ -23,11 +23,18 @@
 	};
 
 	soc {
-        flash0: flash@8002000 {
-            compatible = "soc-nv-flash";
-            erase-block-size = <4096>;
-            write-block-size = <4>;
-            /* Flash size is specified in SOC/SIP dtsi */
+        flash_qspi: flash-controller@e00c0000 {
+			compatible = "freqchip,fr-flash-controller";
+			reg = <0xe00c0000 0x200>;
+
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			flash0: flash@8000000 {
+				compatible = "soc-nv-flash";
+				erase-block-size = <4096>;
+				write-block-size = <1>;
+			};
         };
 
 		pram: memory@1ffe0000 {

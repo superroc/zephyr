@@ -17,6 +17,7 @@
 		zephyr,console = &uart3;
 		zephyr,shell-uart = &uart3;
 		zephyr,bt-hci = &bt_hci_uart;
+		zephyr,code-partition = &slot0_partition; // 指向 application-A 节点
 	};
 };
 
@@ -25,7 +26,34 @@
 };
 
 &flash0 {
-	reg = <0x08002000 DT_SIZE_K(1024-8)>;
+	reg = <0x08000000 DT_SIZE_K(1024)>;
+
+	partitions {
+		compatible = "fixed-partitions";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		// 示例分区定义
+		info_partition: partition@0 {    // INFO分区（0x0~0x2000）
+			label = "information";
+			reg = <0x00000000 0x00002000>;
+		};
+
+		slot0_partition: partition@2000 { // 应用程序主分区（0x08002000~0x08062000）
+			label = "application-A";
+			reg = <0x00002000 0x00060000>;
+		};
+
+		slot1_partition: partition@62000 { // 应用程序备份分区（0x08062000~0x080c2000）
+			label = "application-B";
+			reg = <0x00062000 0x00060000>;
+		};
+
+		storage_partition: partition@c2000 { // 存储分区（0x080c2000~0x080fd000）
+			label = "storage";
+			reg = <0x000c2000 0x0003b000>;
+		};
+	};
 };
 
 &pram {
