@@ -240,6 +240,7 @@ int uart_fr_irq_update(const struct device *dev)
 	struct fr_uart_data *data = dev->data;
 	UART_HandleTypeDef *uart = &data->uart;
 	volatile REG_USR_t usr_status = uart->UARTx->USR;
+	(void)usr_status;
 
 	return 1;
 }
