@@ -225,7 +225,7 @@ manifest:
         - hal
     - name: hal_renesas
       path: modules/hal/renesas
-      revision: cc1323049d15647eb93b60cffe042a5b772ed0de
+      revision: cbaf9b554988614ce11805a9b2f03f6bb0310b8b
       groups:
         - hal
     - name: hal_rpi_pico
@@ -244,7 +244,7 @@ manifest:
       groups:
         - hal
     - name: hal_stm32
-      revision: 55043bcc35fffa3b4a8c75a696d932b5020aad09
+      revision: 04ccc7798343ff51509c5d5276e3bce4375f50e6
       path: modules/hal/stm32
       groups:
         - hal
@@ -259,7 +259,7 @@ manifest:
       groups:
         - hal
     - name: hal_ti
-      revision: 46407c76196ca250c3f955376d52dc3ea25ba381
+      revision: 258652a3ac5d7df68ba8df20e4705c3bd98ede38
       path: modules/hal/ti
       groups:
         - hal
@@ -309,7 +309,7 @@ manifest:
       groups:
         - crypto
     - name: mcuboot
-      revision: 1b2fc096d9a683a7481b13749d01ca8fa78e7afd
+      revision: c8470fb145f8aff92696d05396fb77c3b8068b32
       path: bootloader/mcuboot
       groups:
         - bootloader
