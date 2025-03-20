@@ -173,9 +173,9 @@ manifest:
       groups:
         - hal
     - name: hal_freqchip
-      revision: ignore
+      revision: e94ab865ab265bcd39a6b04c8d33e4b474beb2c6
       path: modules/hal/freqchip
-      url: file:///dev/null
+      url: https://github.com/superroc/hal_freqchip.git
       groups:
         - hal
     - name: hal_gigadevice
