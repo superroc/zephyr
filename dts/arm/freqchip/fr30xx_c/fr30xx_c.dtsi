@@ -7,6 +7,7 @@
 #include <freq.h>
 #include <mem.h>
 #include <arm/armv8-m.dtsi>
+#include <zephyr/dt-bindings/gpio/gpio.h>
 
 / {
 	cpus {
@@ -80,11 +81,43 @@
 			status = "disabled";
 		};
 
-		/*pinctrl: pinctrl@e0050120 {
+		pinctrl: pinctrl@e0050120 {
 			compatible = "freqchip,fr-pinctrl";
-			reg = <0xe0050120 0x28>;
-			status = "disable";
-		};*/
+			#address-cells = <1>;
+			#size-cells = <1>;
+			reg = <0xE0050120 0x28>;
+
+			gpioa: gpio@50000000 {
+				compatible = "freqchip,freqchip-gpio";
+				gpio-controller;
+				#gpio-cells = <2>;
+				reg = <0x50000000 0x14>;
+			};
+			gpiob: gpio@50008000 {
+				compatible = "freqchip,freqchip-gpio";
+				gpio-controller;
+				#gpio-cells = <2>;
+				reg = <0x50008000 0x14>;
+			};
+			gpioc: gpio@50100000 {
+				compatible = "freqchip,freqchip-gpio";
+				gpio-controller;
+				#gpio-cells = <2>;
+				reg = <0x50100000 0x14>;
+			};
+			gpiod: gpio@50108000 {
+				compatible = "freqchip,freqchip-gpio";
+				gpio-controller;
+				#gpio-cells = <2>;
+				reg = <0x50108000 0x14>;
+			};
+			gpioe: gpio@50200000 {
+				compatible = "freqchip,freqchip-gpio";
+				gpio-controller;
+				#gpio-cells = <2>;
+				reg = <0x50200000 0x14>;
+			};
+		};
 	};
 };
 
