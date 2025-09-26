@@ -143,40 +143,10 @@ manifest:
       path: modules/fs/fatfs
       groups:
         - fs
-    - name: hal_adi
-      revision: 15a333d46cea1bb9d34f5f3deba4c255fd652528
-      path: modules/hal/adi
-      groups:
-        - hal
-    - name: hal_afbr
-      revision: 4e1eea7ea283db9d9ce529b0e9f89c0b5c2660e3
-      path: modules/hal/afbr
-      groups:
-        - hal
-    - name: hal_ambiq
-      revision: 5546a303ac04b7bc728b2c92ff1b1009ea795a22
-      path: modules/hal/ambiq
-      groups:
-        - hal
-    - name: hal_atmel
-      revision: 065e57c5013051c8b7f2256271349c6942bd9344
-      path: modules/hal/atmel
-      groups:
-        - hal
-    - name: hal_bouffalolab
-      path: modules/hal/bouffalolab
-      revision: a2276fb0c6ed0eaa6062aa0790500ab32dcaae9c
-      groups:
-        - hal
     - name: hal_espressif
       revision: 44c5ab74101497697e73c06aab82bab20852f3aa
       path: modules/hal/espressif
       west-commands: west/west-commands.yml
-      groups:
-        - hal
-    - name: hal_ethos_u
-      revision: fd5d5b7b36b209f2c48635de5d6c9b8dbf0bfff0
-      path: modules/hal/ethos_u
       groups:
         - hal
     - name: hal_freqchip
@@ -190,66 +160,6 @@ manifest:
       path: modules/hal/gigadevice
       groups:
         - hal
-    - name: hal_infineon
-      revision: f78b8f8202db0115dc41aedda6f77dee8985254f
-      path: modules/hal/infineon
-      groups:
-        - hal
-    - name: hal_intel
-      revision: 82a33b2de29523d9ce572b3d0110a808665cd3ff
-      path: modules/hal/intel
-      groups:
-        - hal
-    - name: hal_microchip
-      revision: ac9c1231020d29aa0285a4e63b66f465b3942eed
-      path: modules/hal/microchip
-      groups:
-        - hal
-    - name: hal_nordic
-      revision: 57d9fc59c9ea86465b5cd26f0fe2b9dcc520768b
-      path: modules/hal/nordic
-      groups:
-        - hal
-    - name: hal_nuvoton
-      revision: be1042dc8a96ebe9ea4c5d714f07c617539106d6
-      path: modules/hal/nuvoton
-      groups:
-        - hal
-    - name: hal_nxp
-      revision: aa3d275aa690dd364503d83ecf730da367297af9
-      path: modules/hal/nxp
-      groups:
-        - hal
-    - name: hal_openisa
-      revision: eabd530a64d71de91d907bad257cd61aacf607bc
-      path: modules/hal/openisa
-      groups:
-        - hal
-    - name: hal_quicklogic
-      revision: bad894440fe72c814864798c8e3a76d13edffb6c
-      path: modules/hal/quicklogic
-      groups:
-        - hal
-    - name: hal_renesas
-      path: modules/hal/renesas
-      revision: d8ee5f18e95b9f4616a481be65e2c9ee0af1779f
-      groups:
-        - hal
-    - name: hal_rpi_pico
-      path: modules/hal/rpi_pico
-      revision: b547a36a722af7787e5f55b551fd6ce72dcba5a4
-      groups:
-        - hal
-    - name: hal_sifli
-      revision: 7be421088b6fa2910917f3f8b656ded01e21b4e8
-      path: modules/hal/sifli
-      groups:
-        - hal
-    - name: hal_silabs
-      revision: b71ca6e4cb7a2ba9413dcdaf256527a4f0c4167a
-      path: modules/hal/silabs
-      groups:
-        - hal
     - name: hal_st
       revision: 9f81b4427e955885398805b7bca0da3a8cd9109c
       path: modules/hal/st
@@ -260,34 +170,9 @@ manifest:
       path: modules/hal/stm32
       groups:
         - hal
-    - name: hal_tdk
-      revision: 6727477af1e46fa43878102489b9672a9d24e39f
-      path: modules/hal/tdk
-      groups:
-        - hal
     - name: hal_telink
       revision: 4226c7fc17d5a34e557d026d428fc766191a0800
       path: modules/hal/telink
-      groups:
-        - hal
-    - name: hal_ti
-      revision: cc049020152585c4e968b83c084d230234b6d852
-      path: modules/hal/ti
-      groups:
-        - hal
-    - name: hal_wch
-      revision: 6dd313768b5f4cc69baeac4ce6e59f2038eb8ce5
-      path: modules/hal/wch
-      groups:
-        - hal
-    - name: hal_wurthelektronik
-      revision: e3e2797b224fc48fdef1bc3e5a12a7c73108bba2
-      path: modules/hal/wurthelektronik
-      groups:
-        - hal
-    - name: hal_xtensa
-      revision: b38620c7cc61e349e192ed86a54940a5cd0636b7
-      path: modules/hal/xtensa
       groups:
         - hal
     - name: hostap
