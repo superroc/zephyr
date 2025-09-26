@@ -22,6 +22,7 @@
 		zephyr,console = &uart0;
 		zephyr,shell-uart = &uart0;
 		zephyr,entropy = &trng;
+		zephyr,crc = &crc;
 	};
 
 	leds {
@@ -120,6 +121,12 @@
 	pinctrl-names = "default";
 };
 
+&dac0 {
+	pinctrl-0 = <&dac0_default>;
+	pinctrl-names = "default";
+	status = "okay";
+};
+
 &port_irq1 {
 	interrupts = <41 12>;
 	status = "okay";
@@ -151,5 +158,9 @@
 };
 
 &wdt {
+	status = "okay";
+};
+
+&crc {
 	status = "okay";
 };

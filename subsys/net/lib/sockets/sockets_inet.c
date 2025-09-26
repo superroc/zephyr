@@ -2,6 +2,8 @@
  * Copyright (c) 2017 Linaro Limited
  * Copyright (c) 2021 Nordic Semiconductor
  * Copyright (c) 2023 Arm Limited (or its affiliates). All rights reserved.
+ * Copyright (c) 2025 Aerlync Labs Inc.
+ * Copyright 2025 NXP
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -34,6 +36,10 @@ LOG_MODULE_DECLARE(net_sock, CONFIG_NET_SOCKETS_LOG_LEVEL);
 #include "sockets_internal.h"
 #include "../../ip/tcp_internal.h"
 #include "../../ip/net_private.h"
+
+#if defined(CONFIG_NET_SOCKETS_INET_RAW)
+BUILD_ASSERT(IPPROTO_IP == 0, "Wildcard IPPROTO_IP must equal 0.");
+#endif
 
 const struct socket_op_vtable sock_fd_op_vtable;
 
@@ -313,11 +319,12 @@ int zsock_bind_ctx(struct net_context *ctx, const struct sockaddr *addr,
 		return -1;
 	}
 
-	/* For DGRAM socket, we expect to receive packets after call to
+	/* For DGRAM or RAW socket, we expect to receive packets after call to
 	 * bind(), but for STREAM socket, next expected operation is
 	 * listen(), which doesn't work if recv callback is set.
 	 */
-	if (net_context_get_type(ctx) == SOCK_DGRAM) {
+	if (net_context_get_type(ctx) == SOCK_DGRAM ||
+	    net_context_get_type(ctx) == SOCK_RAW) {
 		ret = net_context_recv(ctx, zsock_received_cb, K_NO_WAIT,
 				       ctx->user_data);
 		if (ret < 0) {
@@ -343,6 +350,11 @@ int zsock_connect_ctx(struct net_context *ctx, const struct sockaddr *addr,
 	k_timeout_t timeout = K_MSEC(CONFIG_NET_SOCKETS_CONNECT_TIMEOUT);
 	net_context_connect_cb_t cb = NULL;
 	int ret;
+
+	if (net_context_get_type(ctx) == SOCK_RAW) {
+		errno = EOPNOTSUPP;
+		return -1;
+	}
 
 #if defined(CONFIG_SOCKS)
 	if (net_context_is_proxy_enabled(ctx)) {
@@ -419,6 +431,11 @@ int zsock_listen_ctx(struct net_context *ctx, int backlog)
 {
 	int ret;
 
+	if (net_context_get_type(ctx) == SOCK_RAW) {
+		errno = EOPNOTSUPP;
+		return -1;
+	}
+
 	ret = net_context_listen(ctx, backlog);
 	if (ret < 0) {
 		errno = -ret;
@@ -441,6 +458,11 @@ int zsock_accept_ctx(struct net_context *parent, struct sockaddr *addr,
 	struct net_pkt *last_pkt;
 	int fd, ret;
 
+	if (net_context_get_type(parent) == SOCK_RAW) {
+		errno = EOPNOTSUPP;
+		return -1;
+	}
+
 	if (!sock_is_nonblock(parent)) {
 		k_timeout_t timeout = K_FOREVER;
 
@@ -459,6 +481,8 @@ int zsock_accept_ctx(struct net_context *parent, struct sockaddr *addr,
 		errno = EAGAIN;
 		return -1;
 	}
+
+	net_tcp_conn_accepted(ctx);
 
 	fd = zvfs_reserve_fd();
 	if (fd < 0) {
@@ -694,14 +718,16 @@ ssize_t zsock_sendmsg_ctx(struct net_context *ctx, const struct msghdr *msg,
 	return status;
 }
 
-static int sock_get_pkt_src_addr(struct net_pkt *pkt,
-				 enum net_ip_protocol proto,
+static int sock_get_pkt_src_addr(struct net_context *ctx,
+				 struct net_pkt *pkt,
 				 struct sockaddr *addr,
 				 socklen_t addrlen)
 {
 	int ret = 0;
 	struct net_pkt_cursor backup;
 	uint16_t *port;
+	enum net_ip_protocol proto = net_context_get_proto(ctx);
+	enum net_sock_type type = net_context_get_type(ctx);
 
 	if (!addr || !pkt) {
 		return -EINVAL;
@@ -787,8 +813,19 @@ static int sock_get_pkt_src_addr(struct net_pkt *pkt,
 		}
 
 		*port = tcp_hdr->src_port;
+	} else if (IS_ENABLED(CONFIG_NET_SOCKETS_INET_RAW) && type == SOCK_RAW) {
+		*port = 0;
 	} else {
 		ret = -ENOTSUP;
+	}
+
+	if (IS_ENABLED(CONFIG_NET_IPV4_MAPPING_TO_IPV6) && net_pkt_family(pkt) == AF_INET &&
+	    net_context_get_family(ctx) == AF_INET6 && !net_context_is_v6only_set(ctx)) {
+		struct sockaddr_in6 mapped_addr;
+
+		net_ipv6_addr_create_v4_mapped(&net_sin(addr)->sin_addr, &(mapped_addr.sin6_addr));
+		net_ipaddr_copy(&net_sin6(addr)->sin6_addr, &mapped_addr.sin6_addr);
+		addr->sa_family = AF_INET6;
 	}
 
 error:
@@ -1024,7 +1061,7 @@ static int add_pktinfo(struct net_context *ctx,
 		net_ipv6_addr_copy_raw((uint8_t *)&info.ipi6_addr, ipv6_hdr->dst);
 		info.ipi6_ifindex = ctx->iface;
 
-		ret = insert_pktinfo(msg, IPPROTO_IPV6, IPV6_RECVPKTINFO,
+		ret = insert_pktinfo(msg, IPPROTO_IPV6, IPV6_PKTINFO,
 				     &info, sizeof(info));
 
 		goto out;
@@ -1032,6 +1069,35 @@ static int add_pktinfo(struct net_context *ctx,
 
 out:
 	net_pkt_cursor_restore(pkt, &backup);
+
+	return ret;
+}
+
+static int add_hoplimit(struct net_context *ctx,
+			struct net_pkt *pkt,
+			struct msghdr *msg)
+{
+	int ret = -ENOTSUP;
+
+	if (IS_ENABLED(CONFIG_NET_IPV4) && net_pkt_family(pkt) == AF_INET) {
+		int ttl = net_pkt_ipv4_ttl(pkt);
+
+		ret = insert_pktinfo(msg, IPPROTO_IP, IP_TTL,
+				     &ttl, sizeof(ttl));
+
+		goto out;
+	}
+
+	if (IS_ENABLED(CONFIG_NET_IPV6) && net_pkt_family(pkt) == AF_INET6) {
+		int hop_limit = net_pkt_ipv6_hop_limit(pkt);
+
+		ret = insert_pktinfo(msg, IPPROTO_IPV6, IPV6_HOPLIMIT,
+				     &hop_limit, sizeof(hop_limit));
+
+		goto out;
+	}
+
+out:
 
 	return ret;
 }
@@ -1117,8 +1183,7 @@ static ssize_t zsock_recv_dgram(struct net_context *ctx,
 		} else {
 			int ret;
 
-			ret = sock_get_pkt_src_addr(pkt, net_context_get_proto(ctx),
-						   src_addr, *addrlen);
+			ret = sock_get_pkt_src_addr(ctx, pkt, src_addr, *addrlen);
 			if (ret < 0) {
 				errno = -ret;
 				NET_DBG("sock_get_pkt_src_addr %d", ret);
@@ -1203,6 +1268,13 @@ static ssize_t zsock_recv_dgram(struct net_context *ctx,
 				if (IS_ENABLED(CONFIG_NET_CONTEXT_RECV_PKTINFO) &&
 				    net_context_is_recv_pktinfo_set(ctx)) {
 					if (add_pktinfo(ctx, pkt, msg) < 0) {
+						msg->msg_flags |= ZSOCK_MSG_CTRUNC;
+					}
+				}
+
+				if (IS_ENABLED(CONFIG_NET_CONTEXT_RECV_HOPLIMIT) &&
+				    net_context_is_recv_hoplimit_set(ctx)) {
+					if (add_hoplimit(ctx, pkt, msg) < 0) {
 						msg->msg_flags |= ZSOCK_MSG_CTRUNC;
 					}
 				}
@@ -1459,7 +1531,7 @@ ssize_t zsock_recvfrom_ctx(struct net_context *ctx, void *buf, size_t max_len,
 		return 0;
 	}
 
-	if (sock_type == SOCK_DGRAM) {
+	if (sock_type == SOCK_DGRAM || sock_type == SOCK_RAW) {
 		return zsock_recv_dgram(ctx, NULL, buf, max_len, flags, src_addr, addrlen);
 	} else if (sock_type == SOCK_STREAM) {
 		return zsock_recv_stream(ctx, NULL, buf, max_len, flags);
@@ -1492,7 +1564,7 @@ ssize_t zsock_recvmsg_ctx(struct net_context *ctx, struct msghdr *msg,
 		max_len += msg->msg_iov[i].iov_len;
 	}
 
-	if (sock_type == SOCK_DGRAM) {
+	if (sock_type == SOCK_DGRAM || sock_type == SOCK_RAW) {
 		return zsock_recv_dgram(ctx, msg, NULL, max_len, flags,
 					msg->msg_name, &msg->msg_namelen);
 	} else if (sock_type == SOCK_STREAM) {
@@ -1973,6 +2045,18 @@ int zsock_getsockopt_ctx(struct net_context *ctx, int level, int optname,
 			}
 
 			break;
+#if defined(CONFIG_NET_IPV4)
+		case IP_MULTICAST_LOOP:
+			ret = net_context_get_option(ctx,
+						     NET_OPT_IPV4_MCAST_LOOP,
+						     optval, optlen);
+			if (ret < 0) {
+				errno  = -ret;
+				return -1;
+			}
+
+			return 0;
+#endif
 		}
 
 		break;
@@ -2070,6 +2154,8 @@ int zsock_getsockopt_ctx(struct net_context *ctx, int level, int optname,
 				return 0;
 			}
 
+			break;
+
 		case IPV6_MULTICAST_HOPS:
 			ret = net_context_get_option(ctx,
 						     NET_OPT_MCAST_HOP_LIMIT,
@@ -2080,6 +2166,18 @@ int zsock_getsockopt_ctx(struct net_context *ctx, int level, int optname,
 			}
 
 			return 0;
+
+		case IPV6_MULTICAST_LOOP:
+			ret = net_context_get_option(ctx,
+						     NET_OPT_IPV6_MCAST_LOOP,
+						     optval, optlen);
+			if (ret < 0) {
+				errno = -ret;
+				return -1;
+			}
+
+			return 0;
+
 		}
 
 		break;
@@ -2534,6 +2632,23 @@ int zsock_setsockopt_ctx(struct net_context *ctx, int level, int optname,
 
 			break;
 
+		case IP_RECVTTL:
+			if (IS_ENABLED(CONFIG_NET_IPV4) &&
+			    IS_ENABLED(CONFIG_NET_CONTEXT_RECV_HOPLIMIT)) {
+				ret = net_context_set_option(ctx,
+							     NET_OPT_RECV_HOPLIMIT,
+							     optval,
+							     optlen);
+				if (ret < 0) {
+					errno = -ret;
+					return -1;
+				}
+
+				return 0;
+			}
+
+			break;
+
 		case IP_MULTICAST_IF:
 			if (IS_ENABLED(CONFIG_NET_IPV4)) {
 				return ipv4_multicast_if(ctx, optval, optlen, false);
@@ -2591,6 +2706,18 @@ int zsock_setsockopt_ctx(struct net_context *ctx, int level, int optname,
 			}
 
 			break;
+#if defined(CONFIG_NET_IPV4)
+		case IP_MULTICAST_LOOP:
+			ret = net_context_set_option(ctx,
+						     NET_OPT_IPV4_MCAST_LOOP,
+						     optval, optlen);
+			if (ret < 0) {
+				errno  = -ret;
+				return -1;
+			}
+
+			return 0;
+#endif
 		}
 
 		break;
@@ -2630,6 +2757,23 @@ int zsock_setsockopt_ctx(struct net_context *ctx, int level, int optname,
 			    IS_ENABLED(CONFIG_NET_CONTEXT_RECV_PKTINFO)) {
 				ret = net_context_set_option(ctx,
 							     NET_OPT_RECV_PKTINFO,
+							     optval,
+							     optlen);
+				if (ret < 0) {
+					errno  = -ret;
+					return -1;
+				}
+
+				return 0;
+			}
+
+			break;
+
+		case IPV6_RECVHOPLIMIT:
+			if (IS_ENABLED(CONFIG_NET_IPV6) &&
+			    IS_ENABLED(CONFIG_NET_CONTEXT_RECV_HOPLIMIT)) {
+				ret = net_context_set_option(ctx,
+							     NET_OPT_RECV_HOPLIMIT,
 							     optval,
 							     optlen);
 				if (ret < 0) {
@@ -2722,6 +2866,17 @@ int zsock_setsockopt_ctx(struct net_context *ctx, int level, int optname,
 			}
 
 			break;
+
+		case IPV6_MULTICAST_LOOP:
+			ret = net_context_set_option(ctx,
+						     NET_OPT_IPV6_MCAST_LOOP,
+						     optval, optlen);
+			if (ret < 0) {
+				errno = -ret;
+				return -1;
+			}
+
+			return 0;
 		}
 
 		break;
@@ -2735,6 +2890,11 @@ int zsock_getpeername_ctx(struct net_context *ctx, struct sockaddr *addr,
 			  socklen_t *addrlen)
 {
 	socklen_t newlen = 0;
+
+	if (net_context_get_type(ctx) == SOCK_RAW) {
+		errno = EOPNOTSUPP;
+		return -1;
+	}
 
 	if (addr == NULL || addrlen == NULL) {
 		errno = EINVAL;

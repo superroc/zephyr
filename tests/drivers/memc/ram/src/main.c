@@ -1,6 +1,7 @@
 /*
  * Copyright (c) 2020, Teslabs Engineering S.L.
  * Copyright (c) 2022, Basalte bv
+ * Copyright (c) 2025, ZAL Zentrum für Angewandte Luftfahrtforschung GmbH
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -10,7 +11,12 @@
 #include <zephyr/ztest.h>
 
 /** Buffer size. */
+#if DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(psram))
+#define BUF_SIZE 524288U
+#else
 #define BUF_SIZE 64U
+#endif
+
 #define BUF_DEF(label) static uint32_t buf_##label[BUF_SIZE]			\
 	Z_GENERIC_SECTION(LINKER_DT_NODE_REGION_NAME(DT_NODELABEL(label)))
 
@@ -28,7 +34,7 @@ static void test_ram_rw(uint32_t *mem, size_t size)
 
 	/* check that memory contains written range */
 	for (size_t i = 0U; i < size / sizeof(uint32_t); i++) {
-		zassert_equal(mem[i], i, "Unexpected content on byte %ld", i);
+		zassert_equal(mem[i], i, "Unexpected content on byte %zd", i);
 	}
 }
 

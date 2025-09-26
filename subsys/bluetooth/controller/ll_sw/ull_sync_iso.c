@@ -185,6 +185,7 @@ uint8_t ll_big_sync_create(uint8_t big_handle, uint16_t sync_handle,
 
 	/* Initialize sync LLL context */
 	lll = &sync_iso->lll;
+	lll->lazy_prepare = 0U;
 	lll->latency_prepare = 0U;
 	lll->latency_event = 0U;
 	lll->window_widening_prepare_us = 0U;
@@ -506,6 +507,7 @@ void ull_sync_iso_setup(struct ll_sync_iso_set *sync_iso,
 		lll->ptc = 0U;
 	}
 	lll->sdu_interval = PDU_BIG_INFO_SDU_INTERVAL_GET(bi);
+	lll->max_sdu = PDU_BIG_INFO_MAX_SDU_GET(bi);
 
 	/* Pick the 39-bit payload count, 1 MSb is framing bit */
 	lll->payload_count = (uint64_t)bi->payload_count_framing[0];
@@ -657,16 +659,9 @@ void ull_sync_iso_setup(struct ll_sync_iso_set *sync_iso,
 		slot_us += EVENT_OVERHEAD_START_US + EVENT_OVERHEAD_END_US;
 	}
 
-	/* TODO: active_to_start feature port */
-	sync_iso->ull.ticks_active_to_start = 0U;
-	sync_iso->ull.ticks_prepare_to_start =
-		HAL_TICKER_US_TO_TICKS(EVENT_OVERHEAD_XTAL_US);
-	sync_iso->ull.ticks_preempt_to_start =
-		HAL_TICKER_US_TO_TICKS(EVENT_OVERHEAD_PREEMPT_MIN_US);
 	sync_iso->ull.ticks_slot = HAL_TICKER_US_TO_TICKS_CEIL(slot_us);
 
-	ticks_slot_offset = MAX(sync_iso->ull.ticks_active_to_start,
-				sync_iso->ull.ticks_prepare_to_start);
+	ticks_slot_offset = HAL_TICKER_US_TO_TICKS(EVENT_OVERHEAD_XTAL_US);
 	if (IS_ENABLED(CONFIG_BT_CTLR_LOW_LAT)) {
 		ticks_slot_overhead = ticks_slot_offset;
 	} else {
@@ -768,11 +763,6 @@ void ull_sync_iso_done(struct node_rx_event_done *done)
 
 	/* Events elapsed used in timeout checks below */
 	latency_event = lll->latency_event;
-	if (lll->latency_prepare) {
-		elapsed_event = latency_event + lll->latency_prepare;
-	} else {
-		elapsed_event = latency_event + 1U;
-	}
 
 	/* Check for establishmet failure */
 	if (done->extra.estab_failed) {
@@ -805,6 +795,8 @@ void ull_sync_iso_done(struct node_rx_event_done *done)
 			sync_iso->timeout_expire = sync_iso->timeout_reload;
 		}
 	}
+
+	elapsed_event = lll->lazy_prepare + 1U;
 
 	/* check timeout */
 	force = 0U;

@@ -6,7 +6,7 @@
 """
 This test file contains testsuites for the Harness classes of twister
 """
-import mock
+from unittest import mock
 import sys
 import os
 import pytest
@@ -564,6 +564,7 @@ def test_pytest__generate_parameters_for_hardware(tmp_path, pty_value, hardware_
 
     options = handler.options
     options.west_flash = "args"
+    options.flash_command = "flash_command"
 
     hardware.probe_id = "123"
     hardware.product = "product"
@@ -597,6 +598,7 @@ def test_pytest__generate_parameters_for_hardware(tmp_path, pty_value, hardware_
         assert "--runner-params=--runner-param1" in command
         assert "--runner-params=runner-param2" in command
         assert "--west-flash-extra-args=args" in command
+        assert "--flash-command=flash_command" in command
         assert "--device-id=123" in command
         assert "--device-product=product" in command
         assert "--pre-script=pre_script" in command
@@ -734,7 +736,7 @@ TEST_DATA_7 = [
     ),
     (
         True,
-        "not a ztest and no state for dummy.test_id",
+        "dummy.test_id is not a Ztest, status:passed",
         "START - test_testcase",
         [],
         {},
@@ -745,7 +747,7 @@ TEST_DATA_7 = [
     ),
     (
         False,
-        "not a ztest and no state for dummy.test_id",
+        "dummy.test_id is not a Ztest, status:passed",
         "START - test_testcase",
         [],
         {},
@@ -756,7 +758,7 @@ TEST_DATA_7 = [
     ),
     (
         True,
-        "not a ztest and no state for dummy.test_id",
+        "dummy.test_id is not a Ztest, status:failed",
         "START - test_testcase",
         [],
         {},

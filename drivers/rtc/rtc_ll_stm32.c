@@ -2,6 +2,7 @@
  * Copyright (c) 2023 Prevas A/S
  * Copyright (c) 2023 Syslinbit
  * Copyright (c) 2024 STMicroelectronics
+ * Copyright (c) 2025 Alexander Kozhinov <ak.alexander.kozhinov@gmail.com>
  *
  * SPDX-License-Identifier: Apache-2.0
  *
@@ -14,6 +15,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/init.h>
 #include <zephyr/devicetree.h>
+#include <zephyr/spinlock.h>
 #include <zephyr/drivers/rtc.h>
 #include <zephyr/drivers/clock_control/stm32_clock_control.h>
 #include <zephyr/drivers/clock_control.h>
@@ -22,15 +24,17 @@
 #include <stm32_ll_pwr.h>
 #include <stm32_ll_rcc.h>
 #include <stm32_ll_rtc.h>
-#include <stm32_hsem.h>
 #ifdef CONFIG_RTC_ALARM
-#include <stm32_ll_exti.h>
+#include <zephyr/drivers/interrupt_controller/intc_exti_stm32.h>
 #endif /* CONFIG_RTC_ALARM */
 
 #include <zephyr/logging/log.h>
 #ifdef CONFIG_RTC_ALARM
 #include <zephyr/irq.h>
 #endif /* CONFIG_RTC_ALARM */
+
+#include <stm32_backup_domain.h>
+#include <stm32_hsem.h>
 
 #include <stdbool.h>
 #include "rtc_utils.h"
@@ -90,23 +94,9 @@ LOG_MODULE_REGISTER(rtc_stm32, CONFIG_RTC_LOG_LEVEL);
 	| RTC_ALARM_TIME_MASK_HOUR | RTC_ALARM_TIME_MASK_WEEKDAY	\
 	| RTC_ALARM_TIME_MASK_MONTHDAY)
 
-#if DT_INST_NODE_HAS_PROP(0, alrm_exti_line)
-#define RTC_STM32_EXTI_LINE	CONCAT(LL_EXTI_LINE_, DT_INST_PROP(0, alrm_exti_line))
-#else
-#define RTC_STM32_EXTI_LINE	0
-#endif /* DT_INST_NODE_HAS_PROP(0, alrm_exti_line) */
-#endif /* STM32_RTC_ALARM_ENABLED */
+#define RTC_STM32_EXTI_LINE_NUM	DT_INST_PROP_OR(0, alrm_exti_line, 0)
 
-#if defined(PWR_CR_DBP) || defined(PWR_CR1_DBP) || defined(PWR_DBPCR_DBP) || defined(PWR_DBPR_DBP)
-/*
- * After system reset, the RTC registers are protected against parasitic write access by the
- * DBP bit in the power control peripheral (PWR).
- * Hence, DBP bit must be set in order to enable RTC registers write access.
- */
-#define RTC_STM32_BACKUP_DOMAIN_WRITE_PROTECTION	(1)
-#else
-#define RTC_STM32_BACKUP_DOMAIN_WRITE_PROTECTION	(0)
-#endif /* PWR_CR_DBP || PWR_CR1_DBP || PWR_DBPCR_DBP || PWR_DBPR_DBP */
+#endif /* STM32_RTC_ALARM_ENABLED */
 
 struct rtc_stm32_config {
 	uint32_t async_prescaler;
@@ -132,12 +122,41 @@ struct rtc_stm32_alrm {
 #endif /* STM32_RTC_ALARM_ENABLED */
 
 struct rtc_stm32_data {
-	struct k_mutex lock;
+	struct k_spinlock lock;
 #ifdef STM32_RTC_ALARM_ENABLED
 	struct rtc_stm32_alrm rtc_alrm_a;
 	struct rtc_stm32_alrm rtc_alrm_b;
 #endif /* STM32_RTC_ALARM_ENABLED */
 };
+
+#ifdef STM32_RTC_ALARM_ENABLED
+
+static inline void exti_enable_rtc_alarm_it(uint32_t line_num)
+{
+#if defined(CONFIG_SOC_SERIES_STM32U5X) || defined(CONFIG_SOC_SERIES_STM32WBAX)
+	/* in STM32U5 & STM32WBAX series, RTC Alarm event is not routed to EXTI */
+#else
+	int ret;
+
+	ret = stm32_exti_enable(line_num, STM32_EXTI_TRIG_RISING, STM32_EXTI_MODE_IT);
+	if (ret != 0) {
+		LOG_ERR("Failed to enable EXTI line number %d (error %d)", line_num, ret);
+	}
+#endif
+}
+
+static inline void exti_clear_rtc_alarm_flag(uint32_t line_num)
+{
+#if defined(CONFIG_SOC_SERIES_STM32U5X) || defined(CONFIG_SOC_SERIES_STM32WBAX)
+	/* in STM32U5 & STM32WBAX series, RTC Alarm (EXTI event) is not routed to EXTI */
+#else
+	if (stm32_exti_is_pending(line_num)) {
+		stm32_exti_clear_pending(line_num);
+	}
+#endif
+}
+
+#endif /* STM32_RTC_ALARM_ENABLED */
 
 static int rtc_stm32_configure(const struct device *dev)
 {
@@ -291,15 +310,13 @@ void rtc_stm32_isr(const struct device *dev)
 	struct rtc_stm32_alrm *p_rtc_alrm;
 	int id = 0;
 
-#if RTC_STM32_BACKUP_DOMAIN_WRITE_PROTECTION
-	LL_PWR_EnableBkUpAccess();
-#endif /* RTC_STM32_BACKUP_DOMAIN_WRITE_PROTECTION */
-
 	for (id = 0; id < RTC_STM32_ALARMS_COUNT; id++) {
 		if (rtc_stm32_is_active_alarm(RTC, (uint16_t)id) != 0) {
+			stm32_backup_domain_enable_access();
 			LL_RTC_DisableWriteProtection(RTC);
 			rtc_stm32_clear_alarm_flag(RTC, (uint16_t)id);
 			LL_RTC_EnableWriteProtection(RTC);
+			stm32_backup_domain_disable_access();
 
 			if (id == RTC_STM32_ALRM_A) {
 				p_rtc_alrm = &(data->rtc_alrm_a);
@@ -315,11 +332,7 @@ void rtc_stm32_isr(const struct device *dev)
 		}
 	}
 
-#if RTC_STM32_BACKUP_DOMAIN_WRITE_PROTECTION
-	LL_PWR_DisableBkUpAccess();
-#endif /* RTC_STM32_BACKUP_DOMAIN_WRITE_PROTECTION */
-
-	ll_func_exti_clear_rtc_alarm_flag(RTC_STM32_EXTI_LINE);
+	exti_clear_rtc_alarm_flag(RTC_STM32_EXTI_LINE_NUM);
 }
 
 static void rtc_stm32_irq_config(const struct device *dev)
@@ -335,7 +348,7 @@ static int rtc_stm32_init(const struct device *dev)
 {
 	const struct device *const clk = DEVICE_DT_GET(STM32_CLOCK_CONTROL_NODE);
 	const struct rtc_stm32_config *cfg = dev->config;
-	struct rtc_stm32_data *data = dev->data;
+	__maybe_unused struct rtc_stm32_data *data = dev->data;
 
 	int err = 0;
 
@@ -380,12 +393,7 @@ static int rtc_stm32_init(const struct device *dev)
 	}
 #endif /* CONFIG_SOC_SERIES_STM32WB0X */
 
-	k_mutex_init(&data->lock);
-
-	/* Enable Backup access */
-#if RTC_STM32_BACKUP_DOMAIN_WRITE_PROTECTION
-	LL_PWR_EnableBkUpAccess();
-#endif /* RTC_STM32_BACKUP_DOMAIN_WRITE_PROTECTION */
+	stm32_backup_domain_enable_access();
 
 #if DT_INST_CLOCKS_CELL_BY_IDX(0, 1, bus) == STM32_SRC_HSE
 	/* Must be configured before selecting the RTC clock source */
@@ -396,6 +404,7 @@ static int rtc_stm32_init(const struct device *dev)
 		err = clock_control_configure(clk, (clock_control_subsys_t)&cfg->pclken[1], NULL);
 
 		if (err < 0) {
+			stm32_backup_domain_disable_access();
 			LOG_ERR("clock configure failed\n");
 			return -EIO;
 		}
@@ -417,20 +426,18 @@ static int rtc_stm32_init(const struct device *dev)
 
 	err = rtc_stm32_configure(dev);
 
-#if RTC_STM32_BACKUP_DOMAIN_WRITE_PROTECTION
-	LL_PWR_DisableBkUpAccess();
-#endif /* RTC_STM32_BACKUP_DOMAIN_WRITE_PROTECTION */
+	stm32_backup_domain_disable_access();
 
 #ifdef STM32_RTC_ALARM_ENABLED
 	rtc_stm32_irq_config(dev);
 
-	ll_func_exti_enable_rtc_alarm_it(RTC_STM32_EXTI_LINE);
+	exti_enable_rtc_alarm_it(RTC_STM32_EXTI_LINE_NUM);
 
-	k_mutex_lock(&data->lock, K_FOREVER);
-	memset(&(data->rtc_alrm_a), 0, sizeof(struct rtc_stm32_alrm));
-	memset(&(data->rtc_alrm_b), 0, sizeof(struct rtc_stm32_alrm));
-	k_mutex_unlock(&data->lock);
-#endif /* STM32_RTC_ALARM_ENABLED */
+	K_SPINLOCK(&data->lock) {
+		memset(&(data->rtc_alrm_a), 0, sizeof(struct rtc_stm32_alrm));
+		memset(&(data->rtc_alrm_b), 0, sizeof(struct rtc_stm32_alrm));
+	}
+#endif /* CONFIG_RTC_ALARM */
 
 	return err;
 }
@@ -441,7 +448,6 @@ static int rtc_stm32_set_time(const struct device *dev, const struct rtc_time *t
 	LL_RTC_TimeTypeDef rtc_time;
 	LL_RTC_DateTypeDef rtc_date;
 	uint32_t real_year = timeptr->tm_year + TM_YEAR_REF;
-	int err = 0;
 
 	if (real_year < RTC_YEAR_REF) {
 		/* RTC does not support years before 2000 */
@@ -453,22 +459,10 @@ static int rtc_stm32_set_time(const struct device *dev, const struct rtc_time *t
 		return -EINVAL;
 	}
 
-	err = k_mutex_lock(&data->lock, K_NO_WAIT);
-	if (err) {
-		return err;
-	}
-
-	LOG_DBG("Setting clock");
-
-#if RTC_STM32_BACKUP_DOMAIN_WRITE_PROTECTION
-	LL_PWR_EnableBkUpAccess();
-#endif /* RTC_STM32_BACKUP_DOMAIN_WRITE_PROTECTION */
-
 	/* Enter Init mode inside the LL_RTC_Time and Date Init functions */
 	rtc_time.Hours = bin2bcd(timeptr->tm_hour);
 	rtc_time.Minutes = bin2bcd(timeptr->tm_min);
 	rtc_time.Seconds = bin2bcd(timeptr->tm_sec);
-	LL_RTC_TIME_Init(RTC, LL_RTC_FORMAT_BCD, &rtc_time);
 
 	/* Set Date after Time to be sure the DR is correctly updated on stm32F2 serie. */
 	rtc_date.Year = bin2bcd((real_year - RTC_YEAR_REF));
@@ -478,11 +472,17 @@ static int rtc_stm32_set_time(const struct device *dev, const struct rtc_time *t
 	/* WeekDay sunday (tm_wday = 0) is not represented by the same value in hardware,
 	 * all the other values are consistent with what is expected by hardware.
 	 */
+
+	LOG_DBG("Setting clock");
+
+	k_spinlock_key_t key = k_spin_lock(&data->lock);
+
+	stm32_backup_domain_enable_access();
+
+	LL_RTC_TIME_Init(RTC, LL_RTC_FORMAT_BCD, &rtc_time);
 	LL_RTC_DATE_Init(RTC, LL_RTC_FORMAT_BCD, &rtc_date);
 
-#if RTC_STM32_BACKUP_DOMAIN_WRITE_PROTECTION
-	LL_PWR_DisableBkUpAccess();
-#endif /* RTC_STM32_BACKUP_DOMAIN_WRITE_PROTECTION */
+	stm32_backup_domain_disable_access();
 
 #ifdef CONFIG_SOC_SERIES_STM32F2X
 	/*
@@ -494,8 +494,6 @@ static int rtc_stm32_set_time(const struct device *dev, const struct rtc_time *t
 	}
 #endif /* CONFIG_SOC_SERIES_STM32F2X */
 
-	k_mutex_unlock(&data->lock);
-
 	LOG_DBG("Calendar set : %d/%d/%d - %dh%dm%ds",
 			LL_RTC_DATE_GetDay(RTC),
 			LL_RTC_DATE_GetMonth(RTC),
@@ -505,7 +503,9 @@ static int rtc_stm32_set_time(const struct device *dev, const struct rtc_time *t
 			LL_RTC_TIME_GetSecond(RTC)
 	);
 
-	return err;
+	k_spin_unlock(&data->lock, key);
+
+	return 0;
 }
 
 static int rtc_stm32_get_time(const struct device *dev, struct rtc_time *timeptr)
@@ -524,18 +524,14 @@ static int rtc_stm32_get_time(const struct device *dev, struct rtc_time *timeptr
 		return -EINVAL;
 	}
 
-	int err = k_mutex_lock(&data->lock, K_NO_WAIT);
-
-	if (err) {
-		return err;
-	}
+	k_spinlock_key_t key = k_spin_lock(&data->lock);
 
 	if (!LL_RTC_IsActiveFlag_INITS(RTC)) {
 		/* INITS flag is set when the calendar has been initialiazed. This flag is
 		 * reset only on backup domain reset, so it can be read after a system
 		 * reset to check if the calendar has been initialized.
 		 */
-		k_mutex_unlock(&data->lock);
+		k_spin_unlock(&data->lock, key);
 		return -ENODATA;
 	}
 
@@ -555,7 +551,7 @@ static int rtc_stm32_get_time(const struct device *dev, struct rtc_time *timeptr
 		} while (rtc_time != LL_RTC_TIME_Get(RTC));
 	} while (rtc_date != LL_RTC_DATE_Get(RTC));
 
-	k_mutex_unlock(&data->lock);
+	k_spin_unlock(&data->lock, key);
 
 	/* tm_year is the value since 1900 and Rtc year is from 2000 */
 	timeptr->tm_year = bcd2bin(__LL_RTC_GET_YEAR(rtc_date)) + (RTC_YEAR_REF - TM_YEAR_REF);
@@ -757,7 +753,7 @@ static int rtc_stm32_alarm_get_time(const struct device *dev, uint16_t id, uint1
 		return -EINVAL;
 	}
 
-	k_mutex_lock(&data->lock, K_FOREVER);
+	k_spinlock_key_t key = k_spin_lock(&data->lock);
 
 	if (id == RTC_STM32_ALRM_A) {
 		p_rtc_alrm = &(data->rtc_alrm_a);
@@ -785,7 +781,7 @@ static int rtc_stm32_alarm_get_time(const struct device *dev, uint16_t id, uint1
 		timeptr->tm_min, timeptr->tm_sec, *mask);
 
 unlock:
-	k_mutex_unlock(&data->lock);
+	k_spin_unlock(&data->lock, key);
 
 	return err;
 }
@@ -799,7 +795,7 @@ static int rtc_stm32_alarm_set_time(const struct device *dev, uint16_t id, uint1
 	LL_RTC_TimeTypeDef *p_ll_rtc_alrm_time;
 	int err = 0;
 
-	k_mutex_lock(&data->lock, K_FOREVER);
+	k_spinlock_key_t key = k_spin_lock(&data->lock);
 
 	if (id == RTC_STM32_ALRM_A) {
 		p_rtc_alrm = &(data->rtc_alrm_a);
@@ -816,9 +812,9 @@ static int rtc_stm32_alarm_set_time(const struct device *dev, uint16_t id, uint1
 		p_rtc_alrm->user_callback = NULL;
 		p_rtc_alrm->user_data = NULL;
 		p_rtc_alrm->is_pending = false;
-#if RTC_STM32_BACKUP_DOMAIN_WRITE_PROTECTION
-		LL_PWR_EnableBkUpAccess();
-#endif /* RTC_STM32_BACKUP_DOMAIN_WRITE_PROTECTION */
+
+		stm32_backup_domain_enable_access();
+
 		if (rtc_stm32_is_active_alarm(RTC, id)) {
 			LL_RTC_DisableWriteProtection(RTC);
 			rtc_stm32_disable_alarm(RTC, id);
@@ -860,9 +856,7 @@ static int rtc_stm32_alarm_set_time(const struct device *dev, uint16_t id, uint1
 			id, timeptr->tm_sec, timeptr->tm_min, timeptr->tm_hour,
 			timeptr->tm_wday, timeptr->tm_mday, mask);
 
-#if RTC_STM32_BACKUP_DOMAIN_WRITE_PROTECTION
-	LL_PWR_EnableBkUpAccess();
-#endif /* RTC_STM32_BACKUP_DOMAIN_WRITE_PROTECTION */
+	stm32_backup_domain_enable_access();
 
 	/* Disable the write protection for RTC registers */
 	LL_RTC_DisableWriteProtection(RTC);
@@ -907,18 +901,16 @@ static int rtc_stm32_alarm_set_time(const struct device *dev, uint16_t id, uint1
 	/* Enable Alarm IT */
 	rtc_stm32_enable_interrupt_alarm(RTC, id);
 
-	ll_func_exti_enable_rtc_alarm_it(RTC_STM32_EXTI_LINE);
+	exti_enable_rtc_alarm_it(RTC_STM32_EXTI_LINE_NUM);
 
 	/* Enable the write protection for RTC registers */
 	LL_RTC_EnableWriteProtection(RTC);
 
 disable_bkup_access:
-#if RTC_STM32_BACKUP_DOMAIN_WRITE_PROTECTION
-	LL_PWR_DisableBkUpAccess();
-#endif /* RTC_STM32_BACKUP_DOMAIN_WRITE_PROTECTION */
+	stm32_backup_domain_disable_access();
 
 unlock:
-	k_mutex_unlock(&data->lock);
+	k_spin_unlock(&data->lock, key);
 
 	if (id == RTC_STM32_ALRM_A) {
 		LOG_DBG("Alarm A : %dh%dm%ds   mask = 0x%x",
@@ -946,7 +938,7 @@ static int rtc_stm32_alarm_set_callback(const struct device *dev, uint16_t id,
 	struct rtc_stm32_alrm *p_rtc_alrm;
 	int err = 0;
 
-	k_mutex_lock(&data->lock, K_FOREVER);
+	k_spinlock_key_t key = k_spin_lock(&data->lock);
 
 	if (id == RTC_STM32_ALRM_A) {
 		p_rtc_alrm = &(data->rtc_alrm_a);
@@ -963,7 +955,7 @@ static int rtc_stm32_alarm_set_callback(const struct device *dev, uint16_t id,
 	p_rtc_alrm->user_data = user_data;
 
 unlock:
-	k_mutex_unlock(&data->lock);
+	k_spin_unlock(&data->lock, key);
 
 	return err;
 }
@@ -974,7 +966,7 @@ static int rtc_stm32_alarm_is_pending(const struct device *dev, uint16_t id)
 	struct rtc_stm32_alrm *p_rtc_alrm;
 	int ret = 0;
 
-	k_mutex_lock(&data->lock, K_FOREVER);
+	k_spinlock_key_t key = k_spin_lock(&data->lock);
 
 	if (id == RTC_STM32_ALRM_A) {
 		p_rtc_alrm = &(data->rtc_alrm_a);
@@ -992,7 +984,7 @@ static int rtc_stm32_alarm_is_pending(const struct device *dev, uint16_t id)
 	__enable_irq();
 
 unlock:
-	k_mutex_unlock(&data->lock);
+	k_spin_unlock(&data->lock, key);
 	return ret;
 }
 #endif /* STM32_RTC_ALARM_ENABLED */
@@ -1036,9 +1028,7 @@ static int rtc_stm32_set_calibration(const struct device *dev, int32_t calibrati
 		return -EIO;
 	}
 
-#if RTC_STM32_BACKUP_DOMAIN_WRITE_PROTECTION
-	LL_PWR_EnableBkUpAccess();
-#endif /* RTC_STM32_BACKUP_DOMAIN_WRITE_PROTECTION */
+	stm32_backup_domain_enable_access();
 
 	LL_RTC_DisableWriteProtection(RTC);
 
@@ -1046,9 +1036,7 @@ static int rtc_stm32_set_calibration(const struct device *dev, int32_t calibrati
 
 	LL_RTC_EnableWriteProtection(RTC);
 
-#if RTC_STM32_BACKUP_DOMAIN_WRITE_PROTECTION
-	LL_PWR_DisableBkUpAccess();
-#endif /* RTC_STM32_BACKUP_DOMAIN_WRITE_PROTECTION */
+	stm32_backup_domain_disable_access();
 
 	return 0;
 }
@@ -1122,17 +1110,17 @@ BUILD_ASSERT(DT_INST_CLOCKS_HAS_IDX(0, 1), "RTC source clock not defined in the 
 static const struct rtc_stm32_config rtc_config = {
 #if DT_INST_CLOCKS_CELL_BY_IDX(0, 1, bus) == STM32_SRC_LSI
 	/* prescaler values for LSI @ 32 KHz */
-	.async_prescaler = 0x7F,
-	.sync_prescaler = 0x00F9,
+	.async_prescaler = DT_INST_PROP_OR(0, async_prescaler, 0x7F),
+	.sync_prescaler = DT_INST_PROP_OR(0, sync_prescaler, 0x00F9),
 #elif DT_INST_CLOCKS_CELL_BY_IDX(0, 1, bus) == STM32_SRC_LSE
 	/* prescaler values for LSE @ 32768 Hz */
-	.async_prescaler = 0x7F,
-	.sync_prescaler = 0x00FF,
+	.async_prescaler = DT_INST_PROP_OR(0, async_prescaler, 0x7F),
+	.sync_prescaler = DT_INST_PROP_OR(0, sync_prescaler, 0x00FF),
 #elif DT_INST_CLOCKS_CELL_BY_IDX(0, 1, bus) == STM32_SRC_HSE
 	/* prescaler values for HSE */
-	.async_prescaler = RTC_HSE_ASYNC_PRESCALER - 1,
-	.sync_prescaler = RTC_HSE_SYNC_PRESCALER - 1,
-	.hse_prescaler = RTC_HSE_PRESCALER,
+	.async_prescaler = DT_INST_PROP_OR(0, async_prescaler, RTC_HSE_ASYNC_PRESCALER - 1),
+	.sync_prescaler = DT_INST_PROP_OR(0, sync_prescaler, RTC_HSE_SYNC_PRESCALER - 1),
+	.hse_prescaler = DT_INST_PROP_OR(0, hse_prescaler, RTC_HSE_PRESCALER),
 #else
 #error Invalid RTC SRC
 #endif

@@ -225,7 +225,7 @@ SECTIONS
 
 #include <zephyr/linker/cplusplus-rom.ld>
 
-#if defined(CONFIG_BUILD_ALIGN_LMA)
+#if defined(CONFIG_BUILD_ALIGN_LMA) || !defined(CONFIG_XIP)
     /*
      * Include a padding section here to make sure that the LMA address
      * of the sections in the RAMABLE_REGION are aligned with those
@@ -241,6 +241,7 @@ SECTIONS
 	MPU_ALIGN(__rodata_region_end - ADDR(rom_start));
 #endif
 	__rom_region_end = __rom_region_start + . - ADDR(rom_start);
+	__rom_region_size = __rom_region_end - __rom_region_start;
 
     GROUP_END(ROMABLE_REGION)
 
@@ -257,7 +258,10 @@ SECTIONS
 
     GROUP_START(RAMABLE_REGION)
 
+#if ROM_ADDR != RAM_ADDR
 	. = RAM_ADDR;
+#endif
+
 	/* Align the start of image RAM with the
 	 * minimum granularity required by MPU.
 	 */
@@ -409,11 +413,9 @@ GROUP_END(DTCM)
 /* Must be last in romable region */
 SECTION_PROLOGUE(.last_section,,)
 {
-#ifdef CONFIG_LINKER_LAST_SECTION_ID
-  /* Fill last section with a word to ensure location counter and actual rom
-   * region data usage match. */
-  LONG(CONFIG_LINKER_LAST_SECTION_ID_PATTERN)
-#endif
+  /* .last_section contains a fixed word to ensure location counter and actual
+   * rom region data usage match when CONFIG_LINKER_LAST_SECTION_ID=y. */
+  KEEP(*(.last_section))
 } GROUP_LINK_IN(ROMABLE_REGION)
 
 /* To provide the image size as a const expression,

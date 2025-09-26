@@ -6,6 +6,7 @@
  */
 
 #include <errno.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
@@ -54,6 +55,8 @@ static struct bt_ccp_call_control_client clients[CONFIG_BT_MAX_CONN];
 
 static struct bt_ccp_call_control_client *get_client_by_conn(const struct bt_conn *conn)
 {
+	__ASSERT(bt_conn_is_type(conn, BT_CONN_TYPE_LE), "Invalid connection type for %p", conn);
+
 	return &clients[bt_conn_index(conn)];
 }
 
@@ -175,6 +178,11 @@ int bt_ccp_call_control_client_discover(struct bt_conn *conn,
 		return -EINVAL;
 	}
 
+	if (!bt_conn_is_type(conn, BT_CONN_TYPE_LE)) {
+		LOG_DBG("Invalid connection type for %p", conn);
+		return -EINVAL;
+	}
+
 	client = get_client_by_conn(conn);
 	if (atomic_test_and_set_bit(client->flags, CCP_CALL_CONTROL_CLIENT_FLAG_BUSY)) {
 		return -EBUSY;
@@ -229,6 +237,25 @@ int bt_ccp_call_control_client_unregister_cb(struct bt_ccp_call_control_client_c
 	if (!sys_slist_find_and_remove(&ccp_call_control_client_cbs, &cb->_node)) {
 		return -EALREADY;
 	}
+
+	return 0;
+}
+
+int bt_ccp_call_control_client_get_bearers(struct bt_ccp_call_control_client *client,
+					   struct bt_ccp_call_control_client_bearers *bearers)
+{
+	CHECKIF(client == NULL) {
+		LOG_DBG("client is NULL");
+		return -EINVAL;
+	}
+
+	CHECKIF(bearers == NULL) {
+		LOG_DBG("bearers is NULL");
+		return -EINVAL;
+	}
+
+	memset(bearers, 0, sizeof(*bearers));
+	populate_bearers(client, bearers);
 
 	return 0;
 }

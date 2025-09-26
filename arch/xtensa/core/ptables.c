@@ -157,17 +157,6 @@ static const struct xtensa_mmu_range mmu_zephyr_ranges[] = {
 	},
 };
 
-static inline uint32_t *thread_page_tables_get(const struct k_thread *thread)
-{
-#ifdef CONFIG_USERSPACE
-	if ((thread->base.user_options & K_USER) != 0U) {
-		return thread->arch.ptables;
-	}
-#endif
-
-	return xtensa_kernel_ptables;
-}
-
 /**
  * @brief Check if the page table entry is illegal.
  *
@@ -320,7 +309,7 @@ void xtensa_mmu_init(void)
 {
 	xtensa_init_page_tables();
 
-	xtensa_init_paging(xtensa_kernel_ptables);
+	xtensa_mmu_init_paging();
 
 	/*
 	 * This is used to determine whether we are faulting inside double
@@ -335,7 +324,7 @@ void xtensa_mmu_init(void)
 void xtensa_mmu_reinit(void)
 {
 	/* First initialize the hardware */
-	xtensa_init_paging(xtensa_kernel_ptables);
+	xtensa_mmu_init_paging();
 
 #ifdef CONFIG_USERSPACE
 	struct k_thread *thread = _current_cpu->current;
@@ -344,7 +333,7 @@ void xtensa_mmu_reinit(void)
 
 
 	/* Set the page table for current context */
-	xtensa_set_paging(domain->asid, domain->ptables);
+	xtensa_mmu_set_paging(domain);
 #endif /* CONFIG_USERSPACE */
 
 	arch_xtensa_mmu_post_init(_current_cpu->id == 0);
@@ -713,7 +702,7 @@ void xtensa_mmu_tlb_shootdown(void)
 			 */
 			struct arch_mem_domain *domain =
 				&(thread->mem_domain_info.mem_domain->arch);
-			xtensa_set_paging(domain->asid, (uint32_t *)thread_ptables);
+			xtensa_mmu_set_paging(domain);
 		}
 
 	}
@@ -731,6 +720,15 @@ void xtensa_mmu_tlb_shootdown(void)
 }
 
 #ifdef CONFIG_USERSPACE
+
+static inline uint32_t *thread_page_tables_get(const struct k_thread *thread)
+{
+	if ((thread->base.user_options & K_USER) != 0U) {
+		return thread->arch.ptables;
+	}
+
+	return xtensa_kernel_ptables;
+}
 
 static inline uint32_t *alloc_l1_table(void)
 {
@@ -840,6 +838,7 @@ int arch_mem_domain_init(struct k_mem_domain *domain)
 	sys_slist_append(&xtensa_domain_list, &domain->arch.node);
 
 end:
+	xtensa_mmu_compute_domain_regs(&domain->arch);
 	ret = 0;
 
 err:
@@ -848,11 +847,9 @@ err:
 	return ret;
 }
 
-static int region_map_update(uint32_t *ptables, uintptr_t start,
+static void region_map_update(uint32_t *ptables, uintptr_t start,
 			      size_t size, uint32_t ring, uint32_t flags)
 {
-	int ret = 0;
-
 	for (size_t offset = 0; offset < size; offset += CONFIG_MMU_PAGE_SIZE) {
 		uint32_t *l2_table, pte;
 		uint32_t page = start + offset;
@@ -874,15 +871,11 @@ static int region_map_update(uint32_t *ptables, uintptr_t start,
 
 		xtensa_dtlb_vaddr_invalidate((void *)page);
 	}
-
-	return ret;
 }
 
-static inline int update_region(uint32_t *ptables, uintptr_t start,
-				size_t size, uint32_t ring, uint32_t flags,
-				uint32_t option)
+static void update_region(uint32_t *ptables, uintptr_t start, size_t size,
+			  uint32_t ring, uint32_t flags, uint32_t option)
 {
-	int ret;
 	k_spinlock_key_t key;
 
 	key = k_spin_lock(&xtensa_mmu_lock);
@@ -902,13 +895,10 @@ static inline int update_region(uint32_t *ptables, uintptr_t start,
 	new_flags_uc = (flags & ~XTENSA_MMU_PTE_ATTR_CACHED_MASK);
 	new_flags = new_flags_uc | XTENSA_MMU_CACHED_WB;
 
-	ret = region_map_update(ptables, va, size, ring, new_flags);
-
-	if (ret == 0) {
-		ret = region_map_update(ptables, va_uc, size, ring, new_flags_uc);
-	}
+	region_map_update(ptables, va, size, ring, new_flags);
+	region_map_update(ptables, va_uc, size, ring, new_flags_uc);
 #else
-	ret = region_map_update(ptables, start, size, ring, flags);
+	region_map_update(ptables, start, size, ring, flags);
 #endif /* CONFIG_XTENSA_MMU_DOUBLE_MAP */
 
 #if CONFIG_MP_MAX_NUM_CPUS > 1
@@ -919,14 +909,12 @@ static inline int update_region(uint32_t *ptables, uintptr_t start,
 
 	sys_cache_data_flush_and_invd_all();
 	k_spin_unlock(&xtensa_mmu_lock, key);
-
-	return ret;
 }
 
-static inline int reset_region(uint32_t *ptables, uintptr_t start, size_t size, uint32_t option)
+static inline void reset_region(uint32_t *ptables, uintptr_t start, size_t size, uint32_t option)
 {
-	return update_region(ptables, start, size,
-			     XTENSA_MMU_KERNEL_RING, XTENSA_MMU_PERM_W, option);
+	update_region(ptables, start, size,
+		      XTENSA_MMU_KERNEL_RING, XTENSA_MMU_PERM_W, option);
 }
 
 void xtensa_user_stack_perms(struct k_thread *thread)
@@ -951,8 +939,9 @@ int arch_mem_domain_partition_remove(struct k_mem_domain *domain,
 	struct k_mem_partition *partition = &domain->partitions[partition_id];
 
 	/* Reset the partition's region back to defaults */
-	return reset_region(domain->arch.ptables, partition->start,
-			    partition->size, 0);
+	reset_region(domain->arch.ptables, partition->start, partition->size, 0);
+
+	return 0;
 }
 
 int arch_mem_domain_partition_add(struct k_mem_domain *domain,
@@ -962,14 +951,14 @@ int arch_mem_domain_partition_add(struct k_mem_domain *domain,
 	uint32_t ring = K_MEM_PARTITION_IS_USER(partition->attr) ? XTENSA_MMU_USER_RING :
 			XTENSA_MMU_KERNEL_RING;
 
-	return update_region(domain->arch.ptables, partition->start,
-			     partition->size, ring, partition->attr, 0);
+	update_region(domain->arch.ptables, partition->start,
+		      partition->size, ring, partition->attr, 0);
+	return 0;
 }
 
 /* These APIs don't need to do anything */
 int arch_mem_domain_thread_add(struct k_thread *thread)
 {
-	int ret = 0;
 	bool is_user, is_migration;
 	uint32_t *old_ptables;
 	struct k_mem_domain *domain;
@@ -993,16 +982,16 @@ int arch_mem_domain_thread_add(struct k_thread *thread)
 		/* and reset thread's stack permission in
 		 * the old page tables.
 		 */
-		ret = reset_region(old_ptables,
-			thread->stack_info.start,
-			thread->stack_info.size, 0);
+		reset_region(old_ptables, thread->stack_info.start, thread->stack_info.size, 0);
 	}
 
 	/* Need to switch to new page tables if this is
 	 * the current thread running.
 	 */
 	if (thread == _current_cpu->current) {
-		xtensa_set_paging(domain->arch.asid, thread->arch.ptables);
+		struct arch_mem_domain *arch_domain = &(domain->arch);
+
+		xtensa_mmu_set_paging(arch_domain);
 	}
 
 #if CONFIG_MP_MAX_NUM_CPUS > 1
@@ -1017,7 +1006,7 @@ int arch_mem_domain_thread_add(struct k_thread *thread)
 	}
 #endif
 
-	return ret;
+	return 0;
 }
 
 int arch_mem_domain_thread_remove(struct k_thread *thread)
@@ -1045,9 +1034,11 @@ int arch_mem_domain_thread_remove(struct k_thread *thread)
 	 * adding it back to another. So there is no need to send TLB IPI
 	 * at this point.
 	 */
-	return reset_region(domain->arch.ptables,
-			    thread->stack_info.start,
-			    thread->stack_info.size, OPTION_NO_TLB_IPI);
+	reset_region(domain->arch.ptables,
+		     thread->stack_info.start,
+		     thread->stack_info.size, OPTION_NO_TLB_IPI);
+
+	return 0;
 }
 
 static bool page_validate(uint32_t *ptables, uint32_t page, uint8_t ring, bool write)
@@ -1111,7 +1102,7 @@ static int mem_buffer_validate(const void *addr, size_t size, int write, int rin
 	return ret;
 }
 
-bool xtensa_mem_kernel_has_access(void *addr, size_t size, int write)
+bool xtensa_mem_kernel_has_access(const void *addr, size_t size, int write)
 {
 	return mem_buffer_validate(addr, size, write, XTENSA_MMU_KERNEL_RING) == 0;
 }
@@ -1121,26 +1112,20 @@ int arch_buffer_validate(const void *addr, size_t size, int write)
 	return mem_buffer_validate(addr, size, write, XTENSA_MMU_USER_RING);
 }
 
+#ifdef CONFIG_XTENSA_MMU_FLUSH_AUTOREFILL_DTLBS_ON_SWAP
+/* This is only used when swapping page tables and auto-refill DTLBs
+ * needing to be invalidated. Otherwise, SWAP_PAGE_TABLE assembly
+ * is used to avoid a function call.
+ */
 void xtensa_swap_update_page_tables(struct k_thread *incoming)
 {
-	uint32_t *ptables = incoming->arch.ptables;
 	struct arch_mem_domain *domain =
 		&(incoming->mem_domain_info.mem_domain->arch);
 
-	xtensa_set_paging(domain->asid, ptables);
+	xtensa_mmu_set_paging(domain);
 
-#ifdef CONFIG_XTENSA_INVALIDATE_MEM_DOMAIN_TLB_ON_SWAP
-	struct k_mem_domain *mem_domain = incoming->mem_domain_info.mem_domain;
-
-	for (int idx = 0; idx < mem_domain->num_partitions; idx++) {
-		struct k_mem_partition *part = &mem_domain->partitions[idx];
-		uintptr_t end = part->start + part->size;
-
-		for (uintptr_t addr = part->start; addr < end; addr += CONFIG_MMU_PAGE_SIZE) {
-			xtensa_dtlb_vaddr_invalidate((void *)addr);
-		}
-	}
-#endif
+	xtensa_dtlb_autorefill_invalidate();
 }
+#endif
 
 #endif /* CONFIG_USERSPACE */

@@ -793,7 +793,10 @@ static int littlefs_init_cfg(struct fs_littlefs *fs, int flags)
 	uint32_t disk_version = lcp->disk_version;
 
 	if (disk_version == 0) {
-		disk_version = LFS_DISK_VERSION;
+		disk_version = CONFIG_FS_LITTLEFS_DISK_VERSION_NUMBER;
+		if (disk_version == 0) {
+			disk_version = LFS_DISK_VERSION;
+		}
 	}
 #endif /* CONFIG_FS_LITTLEFS_DISK_VERSION */
 
@@ -1098,7 +1101,7 @@ static struct fs_littlefs fs_data_##inst = { \
 }; \
 struct fs_mount_t FS_FSTAB_ENTRY(DT_DRV_INST(inst)) = { \
 	.type = FS_LITTLEFS, \
-	.mnt_point = DT_INST_PROP(inst, mount_point), \
+	.mnt_point = FSTAB_ENTRY_DT_INST_MOUNT_POINT(inst), \
 	.fs_data = &fs_data_##inst, \
 	.storage_dev = (void *)DT_FIXED_PARTITION_ID(FS_PARTITION(inst)), \
 	.flags = FSTAB_ENTRY_DT_MOUNT_FLAGS(DT_DRV_INST(inst)), \

@@ -47,13 +47,15 @@ extern "C" {
 #define SIGSYS    31 /**< Bad system call */
 
 #define SIGRTMIN 32
-#define SIGRTMAX (SIGRTMIN + RTSIG_MAX)
-#define _NSIG (SIGRTMAX + 1)
-
-BUILD_ASSERT(RTSIG_MAX >= 0);
+#if defined(CONFIG_POSIX_REALTIME_SIGNALS) || defined(__DOXYGEN__)
+BUILD_ASSERT(CONFIG_POSIX_RTSIG_MAX >= 0);
+#define SIGRTMAX (SIGRTMIN + CONFIG_POSIX_RTSIG_MAX)
+#else
+#define SIGRTMAX SIGRTMIN
+#endif
 
 typedef struct {
-	unsigned long sig[DIV_ROUND_UP(_NSIG, BITS_PER_LONG)];
+	unsigned long sig[DIV_ROUND_UP(SIGRTMAX + 1, BITS_PER_LONG)];
 } sigset_t;
 
 #ifndef SIGEV_NONE
@@ -122,9 +124,9 @@ unsigned int alarm(unsigned int seconds);
 int kill(pid_t pid, int sig);
 int pause(void);
 int raise(int signo);
-TOOLCHAIN_IGNORE_WSHADOW_BEGIN;
+TOOLCHAIN_DISABLE_WARNING(TOOLCHAIN_WARNING_SHADOW);
 int sigaction(int sig, const struct sigaction *ZRESTRICT act, struct sigaction *ZRESTRICT oact);
-TOOLCHAIN_IGNORE_WSHADOW_END;
+TOOLCHAIN_ENABLE_WARNING(TOOLCHAIN_WARNING_SHADOW);
 int sigpending(sigset_t *set);
 int sigsuspend(const sigset_t *sigmask);
 int sigwait(const sigset_t *ZRESTRICT set, int *ZRESTRICT signo);

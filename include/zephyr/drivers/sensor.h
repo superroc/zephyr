@@ -1,24 +1,28 @@
-/**
- * @file drivers/sensor.h
- *
- * @brief Public APIs for the sensor driver.
- */
-
 /*
- * Copyright (c) 2016 Intel Corporation
- *
- * SPDX-License-Identifier: Apache-2.0
- */
+* Copyright (c) 2016 Intel Corporation
+*
+* SPDX-License-Identifier: Apache-2.0
+*/
 #ifndef ZEPHYR_INCLUDE_DRIVERS_SENSOR_H_
 #define ZEPHYR_INCLUDE_DRIVERS_SENSOR_H_
 
 /**
- * @brief Sensor Interface
- * @defgroup sensor_interface Sensor Interface
+ * @file
+ * @ingroup sensor_interface
+ * @brief Main header file for sensor driver API.
+ */
+
+/**
+ * @brief Interfaces for sensors.
+ * @defgroup sensor_interface Sensor
  * @since 1.2
  * @version 1.0.0
  * @ingroup io_interfaces
  * @{
+ *
+ * @defgroup sensor_interface_ext Device-specific Sensor API extensions
+ * @{
+ * @}
  */
 
 #include <errno.h>
@@ -161,11 +165,11 @@ enum sensor_channel {
 
 	/** Voltage, in volts **/
 	SENSOR_CHAN_GAUGE_VOLTAGE,
-	/** Average current, in amps **/
+	/** Average current, in amps (negative=discharging) **/
 	SENSOR_CHAN_GAUGE_AVG_CURRENT,
-	/** Standby current, in amps **/
+	/** Standby current, in amps (negative=discharging) **/
 	SENSOR_CHAN_GAUGE_STDBY_CURRENT,
-	/** Max load current, in amps **/
+	/** Max load current, in amps (negative=discharging) **/
 	SENSOR_CHAN_GAUGE_MAX_LOAD_CURRENT,
 	/** Gauge temperature  **/
 	SENSOR_CHAN_GAUGE_TEMP,
@@ -272,6 +276,10 @@ enum sensor_trigger_type {
 
 	/** Trigger fires when the FIFO becomes full. */
 	SENSOR_TRIG_FIFO_FULL,
+
+	/** Trigger fires when a tilt is detected. */
+	SENSOR_TRIG_TILT,
+
 	/**
 	 * Number of all common sensor triggers.
 	 */
@@ -919,22 +927,23 @@ static inline int z_impl_sensor_channel_get(const struct device *dev,
  * Generic data structure used for encoding the sample timestamp and number of channels sampled.
  */
 struct __attribute__((__packed__)) sensor_data_generic_header {
-	/* The timestamp at which the data was collected from the sensor */
+	/** The timestamp at which the data was collected from the sensor */
 	uint64_t timestamp_ns;
 
 	/*
-	 * The number of channels present in the frame. This will be the true number of elements in
-	 * channel_info and in the q31 values that follow the header.
+	 ** The number of channels present in the frame.
+	 * This will be the true number of elements in channel_info and in the q31 values that
+	 * follow the header.
 	 */
 	uint32_t num_channels;
 
-	/* Shift value for all samples in the frame */
+	/** Shift value for all samples in the frame */
 	int8_t shift;
 
 	/* This padding is needed to make sure that the 'channels' field is aligned */
 	int8_t _padding[sizeof(struct sensor_chan_spec) - 1];
 
-	/* Channels present in the frame */
+	/** Channels present in the frame */
 	struct sensor_chan_spec channels[0];
 };
 
@@ -1018,11 +1027,12 @@ static inline int z_impl_sensor_get_decoder(const struct device *dev,
  * @return 0 on success
  * @return < 0 on error
  */
-__syscall int sensor_reconfigure_read_iodev(struct rtio_iodev *iodev, const struct device *sensor,
+__syscall int sensor_reconfigure_read_iodev(const struct rtio_iodev *iodev,
+					    const struct device *sensor,
 					    const struct sensor_chan_spec *channels,
 					    size_t num_channels);
 
-static inline int z_impl_sensor_reconfigure_read_iodev(struct rtio_iodev *iodev,
+static inline int z_impl_sensor_reconfigure_read_iodev(const struct rtio_iodev *iodev,
 						       const struct device *sensor,
 						       const struct sensor_chan_spec *channels,
 						       size_t num_channels)
@@ -1039,7 +1049,7 @@ static inline int z_impl_sensor_reconfigure_read_iodev(struct rtio_iodev *iodev,
 	return 0;
 }
 
-static inline int sensor_stream(struct rtio_iodev *iodev, struct rtio *ctx, void *userdata,
+static inline int sensor_stream(const struct rtio_iodev *iodev, struct rtio *ctx, void *userdata,
 				struct rtio_sqe **handle)
 {
 	if (IS_ENABLED(CONFIG_USERSPACE)) {
@@ -1076,7 +1086,7 @@ static inline int sensor_stream(struct rtio_iodev *iodev, struct rtio *ctx, void
  * @return 0 on success
  * @return < 0 on error
  */
-static inline int sensor_read(struct rtio_iodev *iodev, struct rtio *ctx, uint8_t *buf,
+static inline int sensor_read(const struct rtio_iodev *iodev, struct rtio *ctx, uint8_t *buf,
 			      size_t buf_len)
 {
 	if (IS_ENABLED(CONFIG_USERSPACE)) {
@@ -1118,7 +1128,7 @@ static inline int sensor_read(struct rtio_iodev *iodev, struct rtio *ctx, uint8_
  * @return 0 on success
  * @return < 0 on error
  */
-static inline int sensor_read_async_mempool(struct rtio_iodev *iodev, struct rtio *ctx,
+static inline int sensor_read_async_mempool(const struct rtio_iodev *iodev, struct rtio *ctx,
 					    void *userdata)
 {
 	if (IS_ENABLED(CONFIG_USERSPACE)) {
@@ -1345,18 +1355,15 @@ static inline float sensor_value_to_float(const struct sensor_value *val)
  */
 static inline int sensor_value_from_double(struct sensor_value *val, double inp)
 {
-	if (inp < INT32_MIN || inp > INT32_MAX) {
+	if (inp < (double)INT32_MIN || inp > (double)INT32_MAX) {
 		return -ERANGE;
 	}
 
-	double val2 = (inp - (int32_t)inp) * 1000000.0;
+	int32_t val1 = (int32_t)inp;
+	int32_t val2 = (int32_t)((inp - (double)val1) * 1000000.0);
 
-	if (val2 < INT32_MIN || val2 > INT32_MAX) {
-		return -ERANGE;
-	}
-
-	val->val1 = (int32_t)inp;
-	val->val2 = (int32_t)val2;
+	val->val1 = val1;
+	val->val2 = val2;
 
 	return 0;
 }
@@ -1370,14 +1377,15 @@ static inline int sensor_value_from_double(struct sensor_value *val, double inp)
  */
 static inline int sensor_value_from_float(struct sensor_value *val, float inp)
 {
-	float val2 = (inp - (int32_t)inp) * 1000000.0f;
-
-	if (val2 < INT32_MIN || val2 > (float)(INT32_MAX - 1)) {
+	if (inp < (float)INT32_MIN || inp >= (float)INT32_MAX) {
 		return -ERANGE;
 	}
 
-	val->val1 = (int32_t)inp;
-	val->val2 = (int32_t)val2;
+	int32_t val1 = (int32_t)inp;
+	int32_t val2 = (int32_t)((inp - (float)val1) * 1000000.0f);
+
+	val->val1 = val1;
+	val->val2 = val2;
 
 	return 0;
 }
@@ -1467,6 +1475,28 @@ struct sensor_info {
  */
 #define SENSOR_DEVICE_DT_INST_DEFINE(inst, ...)				\
 	SENSOR_DEVICE_DT_DEFINE(DT_DRV_INST(inst), __VA_ARGS__)
+
+/**
+ * @brief Helper function for converting struct sensor_value to integer deci units.
+ *
+ * @param val A pointer to a sensor_value struct.
+ * @return The converted value.
+ */
+static inline int64_t sensor_value_to_deci(const struct sensor_value *val)
+{
+	return ((int64_t)val->val1 * 10) + val->val2 / 100000;
+}
+
+/**
+ * @brief Helper function for converting struct sensor_value to integer centi units.
+ *
+ * @param val A pointer to a sensor_value struct.
+ * @return The converted value.
+ */
+static inline int64_t sensor_value_to_centi(const struct sensor_value *val)
+{
+	return ((int64_t)val->val1 * 100) + val->val2 / 10000;
+}
 
 /**
  * @brief Helper function for converting struct sensor_value to integer milli units.

@@ -21,6 +21,7 @@ Peripherals
    comparator.rst
    coredump.rst
    counter.rst
+   crc.rst
    dac.rst
    dma.rst
    display/index.rst
@@ -40,13 +41,13 @@ Peripherals
    ipm.rst
    led.rst
    mdio.rst
-   mipi_dbi.rst
-   mipi_dsi.rst
    mspi.rst
    mbox.rst
+   opamp.rst
    pcie.rst
    peci.rst
    ps2.rst
+   psi5.rst
    pwm.rst
    rtc.rst
    regulators.rst
@@ -54,6 +55,7 @@ Peripherals
    retained_mem.rst
    sdhc.rst
    sensor/index.rst
+   sent.rst
    spi.rst
    stepper.rst
    smbus.rst

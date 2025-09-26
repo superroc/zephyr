@@ -1,5 +1,5 @@
 /*
- * Copyright 2024  NXP
+ * Copyright 2024-2025 NXP
  * SPDX-License-Identifier: Apache-2.0
  */
 #include <zephyr/init.h>
@@ -9,9 +9,9 @@
 #include <fsl_spc.h>
 #include <soc.h>
 
-/* Core clock frequency: 150MHz */
-#define CLOCK_INIT_CORE_CLOCK            960000000U
-#define BOARD_BOOTCLOCKFRO96M_CORE_CLOCK 960000000U
+/* Core clock frequency: 96MHz */
+#define CLOCK_INIT_CORE_CLOCK            96000000U
+#define BOARD_BOOTCLOCKFRO96M_CORE_CLOCK 96000000U
 /* System clock frequency. */
 extern uint32_t SystemCoreClock;
 
@@ -39,7 +39,7 @@ void board_early_init_hook(void)
 		(void)SPC_SetSRAMOperateVoltage(SPC0, &sramOption);
 	}
 
-	CLOCK_SetupFROHFClocking(96000000U); /*!< Enable FRO HF(96MHz) output */
+	CLOCK_SetupFROHFClocking(CLOCK_INIT_CORE_CLOCK); /*!< Enable FRO HF(96MHz) output */
 
 	CLOCK_SetupFRO12MClocking(); /*!< Setup FRO12M clock */
 
@@ -165,6 +165,12 @@ void board_early_init_hook(void)
 	CLOCK_AttachClk(kFRO_HF_to_FLEXIO0);
 #endif
 
+#if DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(i3c0))
+	/* Attach FRO_HF_DIV clock to I3C, 96MHz / 4 = 24MHz. */
+	CLOCK_SetClockDiv(kCLOCK_DivI3C0_FCLK, 4U);
+	CLOCK_AttachClk(kFRO_HF_DIV_to_I3C0FCLK);
+#endif
+
 #if DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(lpadc0))
 	CLOCK_SetClockDiv(kCLOCK_DivADC0, 1u);
 	CLOCK_AttachClk(kFRO12M_to_ADC0);
@@ -176,6 +182,11 @@ void board_early_init_hook(void)
 	CLOCK_AttachClk(kFRO12M_to_CMP0);
 	CLOCK_SetClockDiv(kCLOCK_DivCMP0_FUNC, 1U);
 	SPC_EnableActiveModeAnalogModules(SPC0, (kSPC_controlCmp0 | kSPC_controlCmp0Dac));
+#endif
+
+#if DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(opamp0))
+	RESET_ReleasePeripheralReset(kOPAMP0_RST_SHIFT_RSTn);
+	SPC_EnableActiveModeAnalogModules(SPC0, kSPC_controlOpamp0);
 #endif
 
 #if DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(lpi2c0))
@@ -227,6 +238,10 @@ void board_early_init_hook(void)
 	CLOCK_AttachClk(kFRO12M_to_LPTMR0);
 #endif /* DT_PROP(DT_NODELABEL(lptmr0), clk_source) */
 
+#endif
+
+#if DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(ostimer0))
+	CLOCK_AttachClk(kCLK_1M_to_OSTIMER);
 #endif
 
 #if DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(usb))

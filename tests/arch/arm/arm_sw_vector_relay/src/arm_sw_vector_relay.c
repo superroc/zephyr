@@ -15,6 +15,13 @@ extern uint32_t _vector_table;
 extern uint32_t __vector_relay_handler;
 extern uint32_t _vector_table_pointer;
 
+
+/**
+ * @brief Test the ARM Software Vector Relay functionality.
+ *
+ * This test verifies the correctness of the ARM software vector relay mechanism.
+ * @ingroup kernel_arch_interrupt_tests
+ */
 ZTEST(arm_sw_vector_relay, test_arm_sw_vector_relay)
 {
 	uint32_t vector_relay_table_addr = (uint32_t)&__vector_relay_table;
@@ -50,7 +57,11 @@ ZTEST(arm_sw_vector_relay, test_arm_sw_vector_relay)
 	/* Verify that the VTOR points to the real vector table,
 	 * NOT the table that contains the forwarding function.
 	 */
+#ifdef CONFIG_SRAM_VECTOR_TABLE
+	zassert_true(SCB->VTOR == (uint32_t)&_sram_vector_start,
+#else
 	zassert_true(SCB->VTOR == (uint32_t)_vector_start,
+#endif
 		     "VTOR not pointing to the real vector table\n");
 #else
 	/* If VTOR is not present then we already need to forward interrupts
@@ -61,6 +72,3 @@ ZTEST(arm_sw_vector_relay, test_arm_sw_vector_relay)
 		     _vector_table_pointer, _vector_start);
 #endif
 }
-/**
- * @}
- */

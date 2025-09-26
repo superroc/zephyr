@@ -23,6 +23,7 @@ from bumble.core import (
 )
 from bumble.device import Device
 from bumble.hci import Address, HCI_Write_Page_Timeout_Command
+from bumble.l2cap import ClassicChannel, L2CAP_Connection_Response
 from bumble.sdp import (
     SDP_BLUETOOTH_PROFILE_DESCRIPTOR_LIST_ATTRIBUTE_ID,
     SDP_BROWSE_GROUP_LIST_ATTRIBUTE_ID,
@@ -338,6 +339,15 @@ async def wait_for_shell_response(dut, message):
     return found, lines
 
 
+async def device_power_on(device) -> None:
+    while True:
+        try:
+            await device.power_on()
+            break
+        except Exception:
+            continue
+
+
 async def sdp_ssa_discover_no_record(hci_port, shell, dut, address) -> None:
     logger.info('<<< SDP Discovery ...')
     async with await open_transport_or_link(hci_port) as hci_transport:
@@ -353,7 +363,7 @@ async def sdp_ssa_discover_no_record(hci_port, shell, dut, address) -> None:
         # device.sdp_service_records = SDP_SERVICE_RECORDS
         with open(f"bumble_hci_{sys._getframe().f_code.co_name}.log", "wb") as snoop_file:
             device.host.snooper = BtSnooper(snoop_file)
-            await device.power_on()
+            await device_power_on(device)
             await device.send_command(HCI_Write_Page_Timeout_Command(page_timeout=0xFFFF))
 
             target_address = address.split(" ")[0]
@@ -386,7 +396,7 @@ async def sdp_ssa_discover_one_record(hci_port, shell, dut, address) -> None:
         device.sdp_service_records = SDP_SERVICE_ONE_RECORD
         with open(f"bumble_hci_{sys._getframe().f_code.co_name}.log", "wb") as snoop_file:
             device.host.snooper = BtSnooper(snoop_file)
-            await device.power_on()
+            await device_power_on(device)
             await device.send_command(HCI_Write_Page_Timeout_Command(page_timeout=0xFFFF))
 
             target_address = address.split(" ")[0]
@@ -443,7 +453,7 @@ async def sdp_ssa_discover_two_records(hci_port, shell, dut, address) -> None:
         device.sdp_service_records = SDP_SERVICE_TWO_RECORDS
         with open(f"bumble_hci_{sys._getframe().f_code.co_name}.log", "wb") as snoop_file:
             device.host.snooper = BtSnooper(snoop_file)
-            await device.power_on()
+            await device_power_on(device)
             await device.send_command(HCI_Write_Page_Timeout_Command(page_timeout=0xFFFF))
 
             target_address = address.split(" ")[0]
@@ -513,7 +523,7 @@ async def sdp_ssa_discover_multiple_records(hci_port, shell, dut, address) -> No
         device.sdp_service_records = SDP_SERVICE_MULTIPLE_RECORDS
         with open(f"bumble_hci_{sys._getframe().f_code.co_name}.log", "wb") as snoop_file:
             device.host.snooper = BtSnooper(snoop_file)
-            await device.power_on()
+            await device_power_on(device)
             await device.send_command(HCI_Write_Page_Timeout_Command(page_timeout=0xFFFF))
 
             target_address = address.split(" ")[0]
@@ -528,6 +538,73 @@ async def sdp_ssa_discover_multiple_records(hci_port, shell, dut, address) -> No
             # Discover SDP Record
             shell.exec_command(f"sdp_client ssa_discovery {BT_L2CAP_PROTOCOL_ID.to_hex_str()}")
             found, lines = await wait_for_shell_response(dut, "SDP Discovery Done")
+            logger.info(f'{lines}')
+            assert found is True
+
+
+async def sdp_ssa_discover_multiple_records_with_range(hci_port, shell, dut, address) -> None:
+    logger.info('<<< SDP Discovery ...')
+    async with await open_transport_or_link(hci_port) as hci_transport:
+        device = Device.with_hci(
+            'Bumble',
+            Address('F0:F1:F2:F3:F4:F5'),
+            hci_transport.source,
+            hci_transport.sink,
+        )
+        device.classic_enabled = True
+        device.le_enabled = False
+        device.sdp_service_records = SDP_SERVICE_MULTIPLE_RECORDS
+        with open(f"bumble_hci_{sys._getframe().f_code.co_name}.log", "wb") as snoop_file:
+            device.host.snooper = BtSnooper(snoop_file)
+            await device_power_on(device)
+            await device.send_command(HCI_Write_Page_Timeout_Command(page_timeout=0xFFFF))
+
+            target_address = address.split(" ")[0]
+            logger.info(f'=== Connecting to {target_address}...')
+            try:
+                connection = await device.connect(target_address, transport=BT_BR_EDR_TRANSPORT)
+                logger.info(f'=== Connected to {connection.peer_address}!')
+            except Exception as e:
+                logger.error(f'Fail to connect to {target_address}!')
+                raise e
+
+            # Discover SDP Record with range SDP_SERVICE_RECORD_HANDLE_ATTRIBUTE_ID ~
+            # SDP_PROTOCOL_DESCRIPTOR_LIST_ATTRIBUTE_ID
+            shell.exec_command(
+                f"sdp_client ssa_discovery {BT_L2CAP_PROTOCOL_ID.to_hex_str()} "
+                f"{SDP_SERVICE_RECORD_HANDLE_ATTRIBUTE_ID} "
+                f"{SDP_PROTOCOL_DESCRIPTOR_LIST_ATTRIBUTE_ID}"
+            )
+            found, lines = await wait_for_shell_response(dut, "SDP Discovery Done")
+            logger.info(f'{lines}')
+            assert found is True
+
+            # Discover SDP Record with range SDP_SUPPORTED_FEATURES_ATTRIBUTE_ID ~
+            # SDP_SUPPORTED_FEATURES_ATTRIBUTE_ID
+            shell.exec_command(
+                f"sdp_client ssa_discovery {BT_L2CAP_PROTOCOL_ID.to_hex_str()} "
+                f"{SDP_SUPPORTED_FEATURES_ATTRIBUTE_ID} "
+                f"{SDP_SUPPORTED_FEATURES_ATTRIBUTE_ID}"
+            )
+            found, lines = await wait_for_shell_response(dut, "SDP Discovery Done")
+            logger.info(f'{lines}')
+            assert found is True
+
+            # Discover SDP Record with range SDP_PROTOCOL_DESCRIPTOR_LIST_ATTRIBUTE_ID ~
+            # 0xffff
+            shell.exec_command(
+                f"sdp_client ssa_discovery {BT_L2CAP_PROTOCOL_ID.to_hex_str()} "
+                f"{SDP_PROTOCOL_DESCRIPTOR_LIST_ATTRIBUTE_ID} 0xffff"
+            )
+            found, lines = await wait_for_shell_response(dut, "SDP Discovery Done")
+            logger.info(f'{lines}')
+            assert found is True
+
+            # Discover SDP Record with range 0xff00 ~ 0xffff
+            shell.exec_command(
+                f"sdp_client ssa_discovery {BT_L2CAP_PROTOCOL_ID.to_hex_str()} 0xff00 0xffff"
+            )
+            found, lines = await wait_for_shell_response(dut, "No SDP Record")
             logger.info(f'{lines}')
             assert found is True
 
@@ -547,7 +624,7 @@ async def sdp_ss_discover_no_record(hci_port, shell, dut, address) -> None:
         # device.sdp_service_records = SDP_SERVICE_RECORDS
         with open(f"bumble_hci_{sys._getframe().f_code.co_name}.log", "wb") as snoop_file:
             device.host.snooper = BtSnooper(snoop_file)
-            await device.power_on()
+            await device_power_on(device)
             await device.send_command(HCI_Write_Page_Timeout_Command(page_timeout=0xFFFF))
 
             target_address = address.split(" ")[0]
@@ -580,7 +657,7 @@ async def sdp_ss_discover_one_record(hci_port, shell, dut, address) -> None:
         device.sdp_service_records = SDP_SERVICE_ONE_RECORD
         with open(f"bumble_hci_{sys._getframe().f_code.co_name}.log", "wb") as snoop_file:
             device.host.snooper = BtSnooper(snoop_file)
-            await device.power_on()
+            await device_power_on(device)
             await device.send_command(HCI_Write_Page_Timeout_Command(page_timeout=0xFFFF))
 
             target_address = address.split(" ")[0]
@@ -623,7 +700,7 @@ async def sdp_ss_discover_two_records(hci_port, shell, dut, address) -> None:
         device.sdp_service_records = SDP_SERVICE_TWO_RECORDS
         with open(f"bumble_hci_{sys._getframe().f_code.co_name}.log", "wb") as snoop_file:
             device.host.snooper = BtSnooper(snoop_file)
-            await device.power_on()
+            await device_power_on(device)
             await device.send_command(HCI_Write_Page_Timeout_Command(page_timeout=0xFFFF))
 
             target_address = address.split(" ")[0]
@@ -666,7 +743,7 @@ async def sdp_ss_discover_multiple_records(hci_port, shell, dut, address) -> Non
         device.sdp_service_records = SDP_SERVICE_MULTIPLE_RECORDS
         with open(f"bumble_hci_{sys._getframe().f_code.co_name}.log", "wb") as snoop_file:
             device.host.snooper = BtSnooper(snoop_file)
-            await device.power_on()
+            await device_power_on(device)
             await device.send_command(HCI_Write_Page_Timeout_Command(page_timeout=0xFFFF))
 
             target_address = address.split(" ")[0]
@@ -710,7 +787,7 @@ async def sdp_sa_discover_no_record(hci_port, shell, dut, address) -> None:
         # device.sdp_service_records = SDP_SERVICE_RECORDS
         with open(f"bumble_hci_{sys._getframe().f_code.co_name}.log", "wb") as snoop_file:
             device.host.snooper = BtSnooper(snoop_file)
-            await device.power_on()
+            await device_power_on(device)
             await device.send_command(HCI_Write_Page_Timeout_Command(page_timeout=0xFFFF))
 
             target_address = address.split(" ")[0]
@@ -743,7 +820,7 @@ async def sdp_sa_discover_one_record(hci_port, shell, dut, address) -> None:
         device.sdp_service_records = SDP_SERVICE_ONE_RECORD
         with open(f"bumble_hci_{sys._getframe().f_code.co_name}.log", "wb") as snoop_file:
             device.host.snooper = BtSnooper(snoop_file)
-            await device.power_on()
+            await device_power_on(device)
             await device.send_command(HCI_Write_Page_Timeout_Command(page_timeout=0xFFFF))
 
             target_address = address.split(" ")[0]
@@ -797,7 +874,7 @@ async def sdp_sa_discover_two_records(hci_port, shell, dut, address) -> None:
         device.sdp_service_records = SDP_SERVICE_TWO_RECORDS
         with open(f"bumble_hci_{sys._getframe().f_code.co_name}.log", "wb") as snoop_file:
             device.host.snooper = BtSnooper(snoop_file)
-            await device.power_on()
+            await device_power_on(device)
             await device.send_command(HCI_Write_Page_Timeout_Command(page_timeout=0xFFFF))
 
             target_address = address.split(" ")[0]
@@ -860,7 +937,7 @@ async def sdp_sa_discover_multiple_records(hci_port, shell, dut, address) -> Non
         device.sdp_service_records = SDP_SERVICE_MULTIPLE_RECORDS
         with open(f"bumble_hci_{sys._getframe().f_code.co_name}.log", "wb") as snoop_file:
             device.host.snooper = BtSnooper(snoop_file)
-            await device.power_on()
+            await device_power_on(device)
             await device.send_command(HCI_Write_Page_Timeout_Command(page_timeout=0xFFFF))
 
             target_address = address.split(" ")[0]
@@ -877,6 +954,122 @@ async def sdp_sa_discover_multiple_records(hci_port, shell, dut, address) -> Non
             found, lines = await wait_for_shell_response(dut, "SDP Discovery Done")
             logger.info(f'{lines}')
             assert found is True
+
+
+async def sdp_sa_discover_multiple_records_with_range(hci_port, shell, dut, address) -> None:
+    logger.info('<<< SDP Discovery ...')
+    async with await open_transport_or_link(hci_port) as hci_transport:
+        device = Device.with_hci(
+            'Bumble',
+            Address('F0:F1:F2:F3:F4:F5'),
+            hci_transport.source,
+            hci_transport.sink,
+        )
+        device.classic_enabled = True
+        device.le_enabled = False
+        device.sdp_service_records = SDP_SERVICE_MULTIPLE_RECORDS
+        with open(f"bumble_hci_{sys._getframe().f_code.co_name}.log", "wb") as snoop_file:
+            device.host.snooper = BtSnooper(snoop_file)
+            await device_power_on(device)
+            await device.send_command(HCI_Write_Page_Timeout_Command(page_timeout=0xFFFF))
+
+            target_address = address.split(" ")[0]
+            logger.info(f'=== Connecting to {target_address}...')
+            try:
+                connection = await device.connect(target_address, transport=BT_BR_EDR_TRANSPORT)
+                logger.info(f'=== Connected to {connection.peer_address}!')
+            except Exception as e:
+                logger.error(f'Fail to connect to {target_address}!')
+                raise e
+
+            # Discover SDP Record with range SDP_SERVICE_RECORD_HANDLE_ATTRIBUTE_ID ~
+            # SDP_PROTOCOL_DESCRIPTOR_LIST_ATTRIBUTE_ID
+            shell.exec_command(
+                f"sdp_client sa_discovery 00010003 {SDP_SERVICE_RECORD_HANDLE_ATTRIBUTE_ID} "
+                f"{SDP_PROTOCOL_DESCRIPTOR_LIST_ATTRIBUTE_ID}"
+            )
+            found, lines = await wait_for_shell_response(dut, "SDP Discovery Done")
+            logger.info(f'{lines}')
+            assert found is True
+
+            # Discover SDP Record with range SDP_SUPPORTED_FEATURES_ATTRIBUTE_ID ~
+            # SDP_SUPPORTED_FEATURES_ATTRIBUTE_ID
+            shell.exec_command(
+                f"sdp_client sa_discovery 00010003 {SDP_SUPPORTED_FEATURES_ATTRIBUTE_ID} "
+                f"{SDP_SUPPORTED_FEATURES_ATTRIBUTE_ID}"
+            )
+            found, lines = await wait_for_shell_response(dut, "SDP Discovery Done")
+            logger.info(f'{lines}')
+            assert found is True
+
+            # Discover SDP Record with range SDP_PROTOCOL_DESCRIPTOR_LIST_ATTRIBUTE_ID ~
+            # 0xffff
+            shell.exec_command(
+                "sdp_client sa_discovery 00010003 "
+                f"{SDP_PROTOCOL_DESCRIPTOR_LIST_ATTRIBUTE_ID} 0xffff"
+            )
+            found, lines = await wait_for_shell_response(dut, "SDP Discovery Done")
+            logger.info(f'{lines}')
+            assert found is True
+
+            # Discover SDP Record with range 0xff00 ~ 0xffff
+            shell.exec_command("sdp_client sa_discovery 00010003 0xff00 0xffff")
+            found, lines = await wait_for_shell_response(dut, "No SDP Record")
+            logger.info(f'{lines}')
+            assert found is True
+
+
+async def sdp_ssa_discover_fail(hci_port, shell, dut, address) -> None:
+    def on_app_connection_request(self, request) -> None:
+        logger.info('Force L2CAP connection failure')
+        self.destination_cid = request.source_cid
+        self.send_control_frame(
+            L2CAP_Connection_Response(
+                identifier=request.identifier,
+                destination_cid=self.source_cid,
+                source_cid=self.destination_cid,
+                result=L2CAP_Connection_Response.CONNECTION_REFUSED_NO_RESOURCES_AVAILABLE,
+                status=0x0000,
+            )
+        )
+
+    # Save the origin method
+    on_connection_request = ClassicChannel.on_connection_request
+    # Replace the origin method with a new one to force L2CAP connection failure
+    ClassicChannel.on_connection_request = on_app_connection_request
+
+    logger.info('<<< SDP Discovery ...')
+    async with await open_transport_or_link(hci_port) as hci_transport:
+        device = Device.with_hci(
+            'Bumble',
+            Address('F0:F1:F2:F3:F4:F5'),
+            hci_transport.source,
+            hci_transport.sink,
+        )
+        device.classic_enabled = True
+        device.le_enabled = False
+        with open(f"bumble_hci_{sys._getframe().f_code.co_name}.log", "wb") as snoop_file:
+            device.host.snooper = BtSnooper(snoop_file)
+            await device_power_on(device)
+            await device.send_command(HCI_Write_Page_Timeout_Command(page_timeout=0xFFFF))
+
+            target_address = address.split(" ")[0]
+            logger.info(f'=== Connecting to {target_address}...')
+            try:
+                connection = await device.connect(target_address, transport=BT_BR_EDR_TRANSPORT)
+                logger.info(f'=== Connected to {connection.peer_address}!')
+            except Exception as e:
+                logger.error(f'Fail to connect to {target_address}!')
+                raise e
+
+            # Discover SDP Record
+            shell.exec_command("sdp_client ssa_discovery_fail")
+            found, lines = await wait_for_shell_response(dut, "test pass")
+            logger.info(f'{lines}')
+            assert found is True
+
+    # Restore the origin method
+    ClassicChannel.on_connection_request = on_connection_request
 
 
 class TestSdpServer:
@@ -905,6 +1098,14 @@ class TestSdpServer:
         logger.info(f'test_sdp_ssa_discover_multiple_records {sdp_client_dut}')
         hci, iut_address = sdp_client_dut
         asyncio.run(sdp_ssa_discover_multiple_records(hci, shell, dut, iut_address))
+
+    def test_sdp_ssa_discover_multiple_records_with_range(
+        self, shell: Shell, dut: DeviceAdapter, sdp_client_dut
+    ):
+        """Test case to request SDP records with range. Multiple SDP record registered."""
+        logger.info(f'test_sdp_ssa_discover_multiple_records_with_range {sdp_client_dut}')
+        hci, iut_address = sdp_client_dut
+        asyncio.run(sdp_ssa_discover_multiple_records_with_range(hci, shell, dut, iut_address))
 
     def test_sdp_ss_discover_no_record(self, shell: Shell, dut: DeviceAdapter, sdp_client_dut):
         """Test case to request SDP records. No SDP record registered."""
@@ -957,3 +1158,17 @@ class TestSdpServer:
         logger.info(f'test_sdp_sa_discover_multiple_records {sdp_client_dut}')
         hci, iut_address = sdp_client_dut
         asyncio.run(sdp_sa_discover_multiple_records(hci, shell, dut, iut_address))
+
+    def test_sdp_sa_discover_multiple_records_with_range(
+        self, shell: Shell, dut: DeviceAdapter, sdp_client_dut
+    ):
+        """Test case to request SDP records with range. Multiple SDP record registered."""
+        logger.info(f'test_sdp_sa_discover_multiple_records_with_range {sdp_client_dut}')
+        hci, iut_address = sdp_client_dut
+        asyncio.run(sdp_sa_discover_multiple_records_with_range(hci, shell, dut, iut_address))
+
+    def test_sdp_ssa_discover_fail(self, shell: Shell, dut: DeviceAdapter, sdp_client_dut):
+        """Test case to request SDP records. but the L2CAP connecting fail."""
+        logger.info(f'test_sdp_ssa_discover_fail {sdp_client_dut}')
+        hci, iut_address = sdp_client_dut
+        asyncio.run(sdp_ssa_discover_fail(hci, shell, dut, iut_address))

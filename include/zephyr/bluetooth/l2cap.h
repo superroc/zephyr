@@ -18,13 +18,18 @@
  * @{
  */
 
+#include <stddef.h>
 #include <stdint.h>
-#include <sys/types.h>
 
-#include <zephyr/sys/atomic.h>
 #include <zephyr/bluetooth/buf.h>
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/hci.h>
+#include <zephyr/kernel.h>
+#include <zephyr/net_buf.h>
+#include <zephyr/sys/atomic.h>
+#include <zephyr/sys/slist.h>
+#include <zephyr/sys/util.h>
+#include <sys/types.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -105,6 +110,20 @@ extern "C" {
  *      support an MPS up to 65533 octets for these channels.
  */
 #define BT_L2CAP_ECRED_MIN_MPS 64
+
+/** @brief L2CAP maximum MTU
+ *
+ *  The maximum MTU for an L2CAP Based Connection. This is the same with or without ECRED. This
+ *  requirement is taken from text in Core 3.A.4.22 and 3.A.4.26 v6.0.
+ */
+#define BT_L2CAP_MAX_MTU UINT16_MAX
+
+/** @brief L2CAP maximum MPS
+ *
+ *  The maximum MPS for an L2CAP Based Connection. This is the same with or without ECRED. This
+ *  requirement is taken from text in Core 3.A.4.22 and 3.A.4.26 v6.0.
+ */
+#define BT_L2CAP_MAX_MPS 65533
 
 /** @brief The maximum number of channels in ECRED L2CAP signaling PDUs
  *
@@ -245,6 +264,8 @@ struct bt_l2cap_le_chan {
 	uint16_t			psm;
 	/** Helps match request context during CoC */
 	uint8_t				ident;
+	/** Opcode of the pending request. Used to match responses with requests. */
+	uint8_t                         pending_req;
 	bt_security_t			required_sec_level;
 
 	/* Response Timeout eXpired (RTX) timer */
@@ -254,8 +275,6 @@ struct bt_l2cap_le_chan {
 
 	/** @internal To be used with @ref bt_conn.upper_data_ready */
 	sys_snode_t			_pdu_ready;
-	/** @internal To be used with @ref bt_conn.upper_data_ready */
-	atomic_t			_pdu_ready_lock;
 	/** @internal Holds the length of the current PDU/segment */
 	size_t				_pdu_remaining;
 };
@@ -763,6 +782,16 @@ int bt_l2cap_server_register(struct bt_l2cap_server *server);
  *  @return 0 in case of success or negative value in case of error.
  */
 int bt_l2cap_br_server_register(struct bt_l2cap_server *server);
+
+/** @brief Unregister L2CAP server on BR/EDR oriented connection.
+ *
+ *  Unregister L2CAP server for a PSM.
+ *
+ *  @param server Server structure.
+ *
+ *  @return 0 in case of success or negative value in case of error.
+ */
+int bt_l2cap_br_server_unregister(struct bt_l2cap_server *server);
 
 /** @brief Connect Enhanced Credit Based L2CAP channels
  *

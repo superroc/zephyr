@@ -4,15 +4,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
-from collections import defaultdict, Counter
-from dataclasses import dataclass, field
+import difflib
 import itertools
-from pathlib import Path
-import pykwalify.core
 import sys
-from typing import List, Union
-import yaml
+from collections import Counter, defaultdict
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import jsonschema
 import list_hardware
+import yaml
+from jsonschema.exceptions import best_match
 from list_hardware import unique_paths
 
 try:
@@ -20,9 +22,13 @@ try:
 except ImportError:
     from yaml import SafeLoader
 
-BOARD_SCHEMA_PATH = str(Path(__file__).parent / 'schemas' / 'board-schema.yml')
-with open(BOARD_SCHEMA_PATH, 'r') as f:
+BOARD_SCHEMA_PATH = str(Path(__file__).parent / 'schemas' / 'board-schema.yaml')
+with open(BOARD_SCHEMA_PATH) as f:
     board_schema = yaml.load(f.read(), Loader=SafeLoader)
+
+validator_class = jsonschema.validators.validator_for(board_schema)
+validator_class.check_schema(board_schema)
+board_validator = validator_class(board_schema)
 
 BOARD_YML = 'board.yml'
 
@@ -39,7 +45,7 @@ BOARD_YML = 'board.yml'
 @dataclass
 class Revision:
     name: str
-    variants: List[str] = field(default_factory=list)
+    variants: list[str] = field(default_factory=list)
 
     @staticmethod
     def from_dict(revision):
@@ -52,7 +58,7 @@ class Revision:
 @dataclass
 class Variant:
     name: str
-    variants: List[str] = field(default_factory=list)
+    variants: list[str] = field(default_factory=list)
 
     @staticmethod
     def from_dict(variant):
@@ -65,14 +71,14 @@ class Variant:
 @dataclass
 class Cpucluster:
     name: str
-    variants: List[str] = field(default_factory=list)
+    variants: list[str] = field(default_factory=list)
 
 
 @dataclass
 class Soc:
     name: str
-    cpuclusters: List[str] = field(default_factory=list)
-    variants: List[str] = field(default_factory=list)
+    cpuclusters: list[str] = field(default_factory=list)
+    variants: list[str] = field(default_factory=list)
 
     @staticmethod
     def from_soc(soc, variants):
@@ -92,7 +98,7 @@ class Soc:
 class Board:
     name: str
     # HWMv1 only supports a single Path, and requires Board dataclass to be hashable.
-    directories: Union[Path, List[Path]]
+    directories: Path | list[Path]
     hwm: str
     full_name: str = None
     arch: str = None
@@ -100,9 +106,9 @@ class Board:
     revision_format: str = None
     revision_default: str = None
     revision_exact: bool = False
-    revisions: List[str] = field(default_factory=list, compare=False)
-    socs: List[Soc] = field(default_factory=list, compare=False)
-    variants: List[str] = field(default_factory=list, compare=False)
+    revisions: list[str] = field(default_factory=list, compare=False)
+    socs: list[Soc] = field(default_factory=list, compare=False)
+    variants: list[str] = field(default_factory=list, compare=False)
 
     @property
     def dir(self):
@@ -123,15 +129,14 @@ class Board:
                     node = s
                     break
 
-        if n > 1:
-            if node.cpuclusters:
-                cpu_qualifier = qualifiers_list.pop(0)
-                for c in node.cpuclusters:
-                    if c.name == cpu_qualifier:
-                        node = c
-                        break
-                else:
-                    node = Variant(None)
+        if n > 1 and node.cpuclusters:
+            cpu_qualifier = qualifiers_list.pop(0)
+            for c in node.cpuclusters:
+                if c.name == cpu_qualifier:
+                    node = c
+                    break
+            else:
+                node = Variant(None)
 
         for q in qualifiers_list:
             for v in node.variants:
@@ -229,23 +234,14 @@ def load_v2_boards(board_name, board_yml, systems):
         with board_yml.open('r', encoding='utf-8') as f:
             b = yaml.load(f.read(), Loader=SafeLoader)
 
-        try:
-            pykwalify.core.Core(source_data=b, schema_data=board_schema).validate()
-        except pykwalify.errors.SchemaError as e:
-            sys.exit('ERROR: Malformed "build" section in file: {}\n{}'
-                     .format(board_yml.as_posix(), e))
-
-        mutual_exclusive = {'board', 'boards'}
-        if len(mutual_exclusive - b.keys()) < 1:
-            sys.exit(f'ERROR: Malformed content in file: {board_yml.as_posix()}\n'
-                     f'{mutual_exclusive} are mutual exclusive at this level.')
+        errors = list(board_validator.iter_errors(b))
+        if errors:
+            sys.exit('ERROR: Malformed board YAML file: '
+                     f'{board_yml.as_posix()}\n'
+                     f'{best_match(errors).message} in {best_match(errors).json_path}')
 
         board_array = b.get('boards', [b.get('board', None)])
         for board in board_array:
-            mutual_exclusive = {'name', 'extend'}
-            if len(mutual_exclusive - board.keys()) < 1:
-                sys.exit(f'ERROR: Malformed "board" section in file: {board_yml.as_posix()}\n'
-                         f'{mutual_exclusive} are mutual exclusive at this level.')
 
             # This is a extending an existing board, place in array to allow later processing.
             if 'extend' in board:
@@ -254,24 +250,10 @@ def load_v2_boards(board_name, board_yml, systems):
                 continue
 
             # Create board
-            if board_name is not None:
-                if board['name'] != board_name:
-                    # Not the board we're looking for, ignore.
-                    continue
+            if board_name is not None and board['name'] != board_name:
+                # Not the board we're looking for, ignore.
+                continue
 
-            board_revision = board.get('revision')
-            if board_revision is not None and board_revision.get('format') != 'custom':
-                if board_revision.get('default') is None:
-                    sys.exit(f'ERROR: Malformed "board" section in file: {board_yml.as_posix()}\n'
-                             "Cannot find required key 'default'. Path: '/board/revision.'")
-                if board_revision.get('revisions') is None:
-                    sys.exit(f'ERROR: Malformed "board" section in file: {board_yml.as_posix()}\n'
-                             "Cannot find required key 'revisions'. Path: '/board/revision.'")
-
-            mutual_exclusive = {'socs', 'variants'}
-            if len(mutual_exclusive - board.keys()) < 1:
-                sys.exit(f'ERROR: Malformed "board" section in file: {board_yml.as_posix()}\n'
-                         f'{mutual_exclusive} are mutual exclusive at this level.')
             socs = [Soc.from_soc(systems.get_soc(s['name']), s.get('variants', []))
                     for s in board.get('socs', {})]
 
@@ -372,7 +354,9 @@ def add_args(parser):
     parser.add_argument("--board", dest='board', default=None,
                         help='lookup the specific board, fail if not found')
     parser.add_argument("--board-dir", default=[], type=Path, action='append',
-                        help='Only look for boards at the specific location')
+                        help='only look for boards at the specific location')
+    parser.add_argument("--fuzzy-match", default=None,
+                        help='lookup boards similar to the given board name')
 
 
 def add_args_formatting(parser):
@@ -414,11 +398,15 @@ def board_v2_qualifiers_csv(board):
 
 def dump_v2_boards(args):
     boards = find_v2_boards(args)
+    if args.fuzzy_match is not None:
+        close_boards = difflib.get_close_matches(args.fuzzy_match, boards.keys())
+        boards = {b: boards[b] for b in close_boards}
 
     for b in boards.values():
         qualifiers_list = board_v2_qualifiers(b)
         if args.cmakeformat is not None:
-            notfound = lambda x: x or 'NOTFOUND'
+            def notfound(x):
+                return x or 'NOTFOUND'
             info = args.cmakeformat.format(
                 NAME='NAME;' + b.name,
                 DIR='DIR;' + ';'.join(
@@ -441,6 +429,11 @@ def dump_v2_boards(args):
 def dump_boards(args):
     arch2boards = find_arch2boards(args)
     for arch, boards in arch2boards.items():
+        if args.fuzzy_match is not None:
+            close_boards = difflib.get_close_matches(args.fuzzy_match, [b.name for b in boards])
+            if not close_boards:
+                continue
+            boards = [b for b in boards if b.name in close_boards]
         if args.cmakeformat is None:
             print(f'{arch}:')
         for board in boards:

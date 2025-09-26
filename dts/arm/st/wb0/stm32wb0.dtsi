@@ -38,7 +38,8 @@
 	};
 
 	sram0: memory@20000000 {
-		compatible = "mmio-sram";
+		compatible = "zephyr,memory-region", "mmio-sram";
+		zephyr,memory-region = "SRAM0";
 	};
 
 	clocks {
@@ -264,7 +265,7 @@
 			#dma-cells = <3>;
 			dma-channels = <8>;
 			dma-generators = <1>;
-			dma-requests= <25>;
+			dma-requests = <25>;
 			status = "disabled";
 		};
 
@@ -281,6 +282,13 @@
 			reg = <0x48600000 DT_SIZE_K(4)>;
 			clocks = <&rcc STM32_CLOCK(AHB0, 18)>;
 			generation-delay-ns = <1250>; /* 1.25us */
+			status = "disabled";
+		};
+
+		iwdg: watchdog@40003000 {
+			compatible = "st,stm32-watchdog";
+			reg = <0x40003000 DT_SIZE_K(1)>;
+			clocks = <&rcc STM32_CLOCK(APB0, 14)>;
 			status = "disabled";
 		};
 	};
