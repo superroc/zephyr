@@ -16,8 +16,8 @@
 
 #define th_sport(_x) UNALIGNED_GET(UNALIGNED_MEMBER_ADDR((_x), th_sport))
 #define th_dport(_x) UNALIGNED_GET(UNALIGNED_MEMBER_ADDR((_x), th_dport))
-#define th_seq(_x) ntohl(UNALIGNED_GET(UNALIGNED_MEMBER_ADDR((_x), th_seq)))
-#define th_ack(_x) ntohl(UNALIGNED_GET(UNALIGNED_MEMBER_ADDR((_x), th_ack)))
+#define th_seq(_x) net_ntohl(UNALIGNED_GET(UNALIGNED_MEMBER_ADDR((_x), th_seq)))
+#define th_ack(_x) net_ntohl(UNALIGNED_GET(UNALIGNED_MEMBER_ADDR((_x), th_ack)))
 
 #define th_off(_x) ((_x)->th_off)
 #define th_flags(_x) UNALIGNED_GET(UNALIGNED_MEMBER_ADDR((_x), th_flags))
@@ -69,7 +69,7 @@
 			(_conn)->iface,					\
 			(_len),						\
 			net_context_get_family((_conn)->context),	\
-			IPPROTO_TCP,					\
+			NET_IPPROTO_TCP,				\
 			TCP_PKT_ALLOC_TIMEOUT);				\
 	} else {							\
 		_pkt = net_pkt_alloc(TCP_PKT_ALLOC_TIMEOUT);		\
@@ -89,7 +89,7 @@
 			(_conn)->iface,					\
 			(_len),						\
 			net_context_get_family((_conn)->context),	\
-			IPPROTO_TCP,					\
+			NET_IPPROTO_TCP,				\
 			TCP_PKT_ALLOC_TIMEOUT);				\
 	} else {							\
 		_pkt = net_pkt_rx_alloc(TCP_PKT_ALLOC_TIMEOUT);		\
@@ -107,7 +107,7 @@
 	if ((_len) > 0) {						\
 		_pkt = net_pkt_alloc_with_buffer(			\
 			(_iface), (_len), (_family),			\
-			IPPROTO_TCP,					\
+			NET_IPPROTO_TCP,				\
 			TCP_PKT_ALLOC_TIMEOUT);				\
 	} else {							\
 		_pkt = net_pkt_alloc(TCP_PKT_ALLOC_TIMEOUT);		\
@@ -219,9 +219,9 @@ enum tcp_data_mode {
 };
 
 union tcp_endpoint {
-	struct sockaddr sa;
-	struct sockaddr_in sin;
-	struct sockaddr_in6 sin6;
+	struct net_sockaddr sa;
+	struct net_sockaddr_in sin;
+	struct net_sockaddr_in6 sin6;
 };
 
 /* TCP Option codes */
@@ -317,6 +317,8 @@ struct tcp { /* TCP connection */
 	enum tcp_state state;
 	enum tcp_data_mode data_mode;
 	uint32_t seq;
+	uint32_t isn;
+	uint32_t isn_peer;
 	uint32_t ack;
 #if defined(CONFIG_NET_TCP_KEEPALIVE)
 	uint32_t keep_idle;

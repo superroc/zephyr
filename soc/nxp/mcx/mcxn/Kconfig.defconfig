@@ -10,7 +10,7 @@ config MFD
 	default y if DT_HAS_NXP_LP_FLEXCOMM_ENABLED
 
 config NUM_IRQS
-	default 155
+	default 156
 
 config ROM_START_OFFSET
 	default 0x400 if BOOTLOADER_MCUBOOT
@@ -36,5 +36,12 @@ config FLASH_FILL_BUFFER_SIZE
 # so the PLL settings will not be performed in the driver.
 config I2S_HAS_PLL_SETTING
 	default n
+
+if PM
+
+configdefault CORTEX_M_SYSTICK_RESET_BY_LPM
+	default y
+
+endif # PM
 
 endif # SOC_FAMILY_MCXN

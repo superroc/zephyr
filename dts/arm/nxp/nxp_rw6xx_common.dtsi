@@ -5,11 +5,11 @@
  */
 
 #include <zephyr/dt-bindings/clock/mcux_lpc_syscon_clock.h>
-#include <dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/gpio/gpio.h>
 #include <zephyr/dt-bindings/memory-attr/memory-attr-arm.h>
-#include <dt-bindings/i2c/i2c.h>
+#include <zephyr/dt-bindings/i2c/i2c.h>
 #include <zephyr/dt-bindings/power/nxp_rw_pmu.h>
-#include <dt-bindings/adc/nxp,gau-adc.h>
+#include <zephyr/dt-bindings/adc/nxp,gau-adc.h>
 #include <zephyr/dt-bindings/reset/nxp_syscon_reset_common.h>
 #include <zephyr/dt-bindings/memory-attr/memory-attr-arm.h>
 
@@ -43,8 +43,8 @@
 			idle: idle {
 				compatible = "zephyr,power-state";
 				power-state-name = "runtime-idle";
-				min-residency-us = <0>;
-				exit-latency-us = <0>;
+				min-residency-us = <60>;
+				exit-latency-us = <38>;
 			};
 
 			/* Suspend mode maps to Power Mode 2 */
@@ -52,7 +52,7 @@
 				compatible = "nxp,pdcfg-power", "zephyr,power-state";
 				power-state-name = "suspend-to-idle";
 				min-residency-us = <600>;
-				exit-latency-us = <0>;
+				exit-latency-us = <38>;
 				deep-sleep-config = <0x180000>,
 						    <0x0>,
 						    <0x4>,
@@ -64,9 +64,8 @@
 			standby: standby {
 				compatible = "nxp,pdcfg-power", "zephyr,power-state";
 				power-state-name = "standby";
-				/* TODO: Revisit latency numbers */
-				min-residency-us = <6000>;
-				exit-latency-us = <0>;
+				min-residency-us = <336000>;
+				exit-latency-us = <14000>;
 				deep-sleep-config = <0x180000>,
 						    <0x0>,
 						    <0x4>,

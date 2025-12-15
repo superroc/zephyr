@@ -75,19 +75,19 @@ static int lan9250_read_sys_reg(const struct device *dev, uint16_t address, uint
 static int lan9250_wait_ready(const struct device *dev, uint16_t address, uint32_t mask,
 			      uint32_t expected, uint32_t m_second)
 {
+	int ret;
 	uint32_t tmp;
-	int wait_time = 0;
+	k_timepoint_t end = sys_timepoint_calc(K_MSEC(m_second));
 
 	while (true) {
-		lan9250_read_sys_reg(dev, address, &tmp);
-		wait_time++;
-		k_busy_wait(USEC_PER_MSEC * 1U);
-		if ((tmp & mask) == expected) {
+		ret = lan9250_read_sys_reg(dev, address, &tmp);
+		if ((ret == 0) && ((tmp & mask) == expected)) {
 			return 0;
-		} else if (wait_time == m_second) {
-			LOG_ERR("NOT READY");
+		}
+		if (sys_timepoint_expired(end)) {
 			return -EIO;
 		}
+		k_busy_wait(USEC_PER_MSEC * 1U);
 	}
 }
 
@@ -128,18 +128,19 @@ static int lan9250_write_mac_reg(const struct device *dev, uint8_t address, uint
 static int lan9250_wait_mac_ready(const struct device *dev, uint8_t address, uint32_t mask,
 				  uint32_t expected, uint32_t m_second)
 {
+	int ret;
 	uint32_t tmp;
-	int wait_time = 0;
+	k_timepoint_t end = sys_timepoint_calc(K_MSEC(m_second));
 
 	while (true) {
-		lan9250_read_mac_reg(dev, address, &tmp);
-		wait_time++;
-		k_msleep(1);
-		if ((tmp & mask) == expected) {
+		ret = lan9250_read_mac_reg(dev, address, &tmp);
+		if ((ret == 0) && ((tmp & mask) == expected)) {
 			return 0;
-		} else if (wait_time == m_second) {
+		}
+		if (sys_timepoint_expired(end)) {
 			return -EIO;
 		}
+		k_msleep(1);
 	}
 }
 
@@ -236,15 +237,19 @@ static int lan9250_hw_cfg_check(const struct device *dev)
 
 static int lan9250_sw_reset(const struct device *dev)
 {
-	lan9250_write_sys_reg(dev, LAN9250_RESET_CTL,
-			      LAN9250_RESET_CTL_HMAC_RST | LAN9250_RESET_CTL_PHY_RST |
-			      LAN9250_RESET_CTL_DIGITAL_RST);
+	int ret;
+
+	ret = lan9250_write_sys_reg(dev, LAN9250_RESET_CTL,
+				    LAN9250_RESET_CTL_HMAC_RST |
+				    LAN9250_RESET_CTL_PHY_RST |
+				    LAN9250_RESET_CTL_DIGITAL_RST);
+	if (ret < 0) {
+		return ret;
+	}
 
 	/* Wait until LAN9250 SPI bus is ready */
-	lan9250_wait_ready(dev, LAN9250_BYTE_TEST, BOTR_MASK, LAN9250_BYTE_TEST_DEFAULT,
-			   LAN9250_RESET_TIMEOUT);
-
-	return 0;
+	return lan9250_wait_ready(dev, LAN9250_BYTE_TEST, BOTR_MASK,
+				  LAN9250_BYTE_TEST_DEFAULT, LAN9250_RESET_TIMEOUT);
 }
 
 static int lan9250_configure(const struct device *dev)
@@ -481,7 +486,7 @@ static int lan9250_rx(const struct device *dev)
 	}
 
 	/* Get the frame from the buffer */
-	pkt = net_pkt_rx_alloc_with_buffer(ctx->iface, pkt_len, AF_UNSPEC, 0,
+	pkt = net_pkt_rx_alloc_with_buffer(ctx->iface, pkt_len, NET_AF_UNSPEC, 0,
 					   K_MSEC(config->timeout));
 	if (!pkt) {
 		LOG_ERR("%s: Could not allocate rx buffer", dev->name);
@@ -655,6 +660,7 @@ static const struct ethernet_api api_funcs = {
 
 static int lan9250_init(const struct device *dev)
 {
+	int ret;
 	const struct lan9250_config *config = dev->config;
 	struct lan9250_runtime *context = dev->data;
 
@@ -672,23 +678,59 @@ static int lan9250_init(const struct device *dev)
 		return -EINVAL;
 	}
 
-	if (gpio_pin_configure_dt(&config->interrupt, GPIO_INPUT)) {
+	ret = gpio_pin_configure_dt(&config->interrupt, GPIO_INPUT);
+	if (ret < 0) {
 		LOG_ERR("Unable to configure GPIO pin %u", config->interrupt.pin);
-		return -EINVAL;
+		return ret;
 	}
 
-	gpio_init_callback(&(context->gpio_cb), lan9250_gpio_callback, BIT(config->interrupt.pin));
-	if (gpio_add_callback(config->interrupt.port, &(context->gpio_cb))) {
-		return -EINVAL;
+	gpio_init_callback(&(context->gpio_cb), lan9250_gpio_callback,
+			   BIT(config->interrupt.pin));
+	ret = gpio_add_callback(config->interrupt.port, &context->gpio_cb);
+	if (ret < 0) {
+		LOG_ERR("Unable to add GPIO callback %u", config->interrupt.pin);
+		return ret;
 	}
 
-	gpio_pin_interrupt_configure_dt(&config->interrupt, GPIO_INT_EDGE_TO_ACTIVE);
+	ret = gpio_pin_interrupt_configure_dt(&config->interrupt,
+					      GPIO_INT_EDGE_TO_ACTIVE);
+	if (ret < 0) {
+		LOG_ERR("Unable to enable GPIO INT %u", config->interrupt.pin);
+		return ret;
+	}
 
-	/* Wait until LAN9250 SPI bus is ready */
-	lan9250_wait_ready(dev, LAN9250_BYTE_TEST, BOTR_MASK, LAN9250_BYTE_TEST_DEFAULT,
-			   LAN9250_RESET_TIMEOUT);
-	lan9250_sw_reset(dev);
+	if (config->reset.port != NULL) {
+		if (!gpio_is_ready_dt(&config->reset)) {
+			LOG_ERR("GPIO port %s not ready", config->reset.port->name);
+			return -EINVAL;
+		}
+
+		ret = gpio_pin_configure_dt(&config->reset, GPIO_OUTPUT_INACTIVE);
+		if (ret < 0) {
+			LOG_ERR("Unable to configure GPIO pin %u", config->reset.pin);
+			return ret;
+		}
+
+		/* See Section 19.6.3 from the LAN9250 Data Sheet
+		 *
+		 * trstia is 200 microseconds min (use 250 us)
+		 * tcfg is 15 milliseconds min (use 20 ms for after reset)
+		 */
+		gpio_pin_set_dt(&config->reset, 1);
+		k_usleep(250);
+		gpio_pin_set_dt(&config->reset, 0);
+		k_msleep(20);
+	}
+
+	/* Reset and wait for ready on the LAN9250 SPI device */
+	ret = lan9250_sw_reset(dev);
+	if (ret < 0) {
+		LOG_ERR("Reset failed");
+		return ret;
+	}
 	lan9250_configure(dev);
+
+	(void)net_eth_mac_load(&config->mac_cfg, context->mac_address);
 	lan9250_set_macaddr(dev);
 
 	k_thread_create(&context->thread, context->thread_stack,
@@ -708,9 +750,11 @@ static int lan9250_init(const struct device *dev)
 	};                                                                                         \
                                                                                                    \
 	static const struct lan9250_config lan9250_##inst##_config = {                             \
-		.spi = SPI_DT_SPEC_INST_GET(inst, SPI_WORD_SET(8), 0),                             \
+		.spi = SPI_DT_SPEC_INST_GET(inst, SPI_WORD_SET(8)),                                \
 		.interrupt = GPIO_DT_SPEC_INST_GET(inst, int_gpios),                               \
+		.reset = GPIO_DT_SPEC_INST_GET_OR(inst, reset_gpios, {0}),                         \
 		.timeout = CONFIG_ETH_LAN9250_BUF_ALLOC_TIMEOUT,                                   \
+		.mac_cfg = NET_ETH_MAC_DT_INST_CONFIG_INIT(inst),                                  \
 	};                                                                                         \
                                                                                                    \
 	ETH_NET_DEVICE_DT_INST_DEFINE(inst, lan9250_init, NULL, &lan9250_##inst##_runtime,         \

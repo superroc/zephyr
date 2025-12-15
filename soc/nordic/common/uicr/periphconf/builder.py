@@ -41,6 +41,9 @@ SKIP_SPU_PERIPH_PERM_COMPATS = {
     "nordic,nrf-temp",
     "nordic,nrf-vevif-task-tx",
     "nordic,nrf-vevif-task-rx",
+    # No retention in TDD so permissions can't be set outside of the TDD service
+    "nordic,coresight-nrf",
+    "nordic,nrf-tbm",
 }
 
 # Compatibles of global peripherals that should be assigned to the current core but do not have DMA
@@ -147,7 +150,7 @@ class PeriphconfBuilder:
 
         :param node_or_nodelabel: node or label of the node to process.
         """
-        self._add_peripheral_cfg(node_or_nodelabel, is_global=False, add_gpios=False)
+        self._add_peripheral_cfg(node_or_nodelabel, is_global=False)
 
     def add_global_peripheral_cfg(
         self,
@@ -179,7 +182,6 @@ class PeriphconfBuilder:
         is_global: bool = True,
         has_irq_mapping: bool = True,
         add_ppib_channel_links: bool = True,
-        add_gpios: bool = True,
     ) -> None:
         if isinstance(node_or_nodelabel, str):
             node = self._dt.label2node[node_or_nodelabel]
@@ -220,13 +222,11 @@ class PeriphconfBuilder:
             if "nordic,nrf-comp" in node.compats or "nordic,nrf-lpcomp" in node.compats:
                 self._add_nrf_comp_lpcomp_channel_pin_spu_permissions(node)
 
-            self._add_peripheral_pinctrls_spu_permissions_and_ctrlsel(node)
-
         if "nordic,nrf-ipct-local" in node.compats:
             self._add_nrf_ipct_ipcmap_channel_links(node)
 
-        if add_gpios:
-            self._add_peripheral_gpios_spu_permissions_and_ctrlsel(node)
+        self._add_peripheral_pinctrls_spu_permissions_and_ctrlsel(node)
+        self._add_peripheral_gpios_spu_permissions_and_ctrlsel(node)
 
     def add_gpio_spu_permissions(self, node_or_nodelabel: Node | str, /) -> None:
         """Generate macros for populating SPU FEATURE.GPIO[n].PIN[m] registers based on
@@ -881,10 +881,12 @@ def dt_node_is_secure(node: Node) -> bool:
     elif node.regs:
         addr = dt_reg_addr(node)
     else:
-        raise ValueError(
+        log.debug(
             f"Failed to determine security of {node.path} "
-            "from the address of its bus node or itself"
+            "from the address of its bus node or itself. "
+            "Defaulting to Secure."
         )
+        return True
     return Address(addr).security
 
 
@@ -1017,6 +1019,12 @@ class NrfFun(int, enum.Enum):
     TDM_SDIN = 75
     TDM_SDOUT = 76
     TDM_MCK = 77
+    SPIM_CSN = 78
+    TPIU_CLOCK = 79
+    TPIU_DATA0 = 80
+    TPIU_DATA1 = 81
+    TPIU_DATA2 = 82
+    TPIU_DATA3 = 83
 
     # Value used to ignore the function field and only check (port, pin)
     IGNORE = -1
@@ -1107,19 +1115,21 @@ class SocLookupTables:
 
     def lookup_ctrlsel_for_pinctrl(self, prop: PinCtrl, psel: NrfPsel) -> Ctrlsel | None:
         """Find the appopriate CTRLSEL value for a given pinctrl."""
+        ctrlsel_default = None
         if psel.fun == NrfFun.ASSUMED_GPIO:
             # We map unsupported values to GPIO CTRLSEL
-            return CTRLSEL_DEFAULT
+            ctrlsel_default = CTRLSEL_DEFAULT
 
         periph_addr = dt_reg_addr(prop.node, secure=True)
-        return self._lookup_ctrlsel(periph_addr, psel)
+        return self._lookup_ctrlsel(periph_addr, psel, ctrlsel_default=ctrlsel_default)
 
     def _lookup_ctrlsel(
         self,
         periph_addr: int,
         prop_or_psel: NrfPsel | GpiosProp,
+        ctrlsel_default: Ctrlsel | None = None,
     ) -> Ctrlsel | None:
-        ctrlsel = None
+        ctrlsel = ctrlsel_default
 
         if periph_addr in self.ctrlsel_lookup:
             ident_lut = self.ctrlsel_lookup[periph_addr]

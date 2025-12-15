@@ -25,7 +25,6 @@ sys.path.insert(0, str(ZEPHYR_BASE / "soc/nordic/common/uicr"))
 from periphconf.builder import (
     Ctrlsel,
     FixedPPIMap,
-    GpiosProp,
     Node,
     NrfCompChannel,
     NrfFun,
@@ -55,11 +54,51 @@ def get_additional_node_kwargs(node: Node) -> dict[str, Any]:
     return additional_kwargs
 
 
+class Family(enum.Enum):
+    """Families of SoCs supported by this script"""
+
+    SERIES_NRF54HX = "nrf54h"
+    SERIES_NRF92X = "nrf92"
+    SERIES_UNKNOWN = "unknown"
+
+    @classmethod
+    def family(cls, soc):
+        if soc.startswith("nrf54h") and len(soc) == 8:
+            return cls.SERIES_NRF54HX
+        elif soc.startswith("nrf92") and len(soc) == 7:
+            return cls.SERIES_NRF92X
+        else:
+            return cls.SERIES_UNKNOWN
+
+
 class Soc(enum.Enum):
     """Names of SoCs supported by this script"""
 
     NRF54H20 = "nrf54h20"
     NRF9280 = "nrf9280"
+    UNKNOWN = "unknown"
+
+    @classmethod
+    def soc(cls, soc):
+        if soc.startswith("nrf54h20") and len(soc) == 8:
+            return cls.NRF54H20
+        elif soc.startswith("nrf9280") and len(soc) == 7:
+            return cls.NRF9280
+        else:
+            return cls.UNKNOWN
+
+
+def validate_soc_choice(soc):
+    """Helper for argparse to validate soc parameter type"""
+
+    if (soc.startswith("nrf54h") and soc[6:].isdigit() and len(soc) == 8) or (
+        soc.startswith("nrf92") and soc[5:].isdigit() and len(soc) == 7
+    ):
+        return soc
+    else:
+        raise argparse.ArgumentTypeError(
+            f"Invalid soc '{soc}'. Must start with 'nrf54h' or 'nrf92' followed by 2 digits."
+        )
 
 
 def parse_args() -> argparse.Namespace:
@@ -79,8 +118,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--soc",
+        type=validate_soc_choice,
         required=True,
-        choices=[soc.value for soc in Soc],
         help=(
             "SoC to generate PERIPHCONF macros for. "
             "Used to look up soc specific hardware information"
@@ -105,7 +144,7 @@ def main() -> None:
     args = parse_args()
     dt = pickle.load(args.in_edt_pickle)
     processor = dt_processor_id(dt)
-    lookup_tables = lookup_tables_get(Soc(args.soc))
+    lookup_tables = lookup_tables_get(Soc.soc(args.soc), Family.family(args.soc))
     builder = PeriphconfBuilder(dt, lookup_tables)
 
     # Application local peripherals
@@ -122,6 +161,10 @@ def main() -> None:
     for node in dt.label2node["global_peripherals"].children.values():
         builder.add_global_peripheral_cfg(node, **get_additional_node_kwargs(node))
 
+    # TDD (Trace and Debug Domain) peripherals - contains coresight/TPIU
+    for node in dt.label2node["tdd_peripherals"].children.values():
+        builder.add_global_peripheral_cfg(node, **get_additional_node_kwargs(node))
+
     # Add pins referenced by 'gpios' properties on non-peripheral nodes, for example
     # buttons and leds. We only add SPU configurations for these and not CTRLSEL,
     # to avoid false CTRLSEL conflicts for things like PWM leds.
@@ -135,7 +178,7 @@ def main() -> None:
     args.out_periphconf_source.write(generated_source)
 
 
-def lookup_tables_get(soc: Soc) -> SocLookupTables:
+def lookup_tables_get(soc: Soc, family: Family) -> SocLookupTables:
     if soc == Soc.NRF54H20:
         ctrlsel_lookup = {
             # CAN120
@@ -178,7 +221,7 @@ def lookup_tables_get(soc: Soc) -> SocLookupTables:
                 # SPIM mappings
                 NrfPsel(fun=NrfFun.SPIM_MOSI, port=9, pin=5): Ctrlsel.SERIAL0,
                 NrfPsel(fun=NrfFun.SPIM_MISO, port=9, pin=2): Ctrlsel.SERIAL0,
-                GpiosProp(name="cs-gpios", port=9, pin=3): Ctrlsel.SERIAL0,
+                NrfPsel(fun=NrfFun.SPIM_CSN, port=9, pin=3): Ctrlsel.SERIAL0,
                 NrfPsel(fun=NrfFun.SPIM_SCK, port=9, pin=4): Ctrlsel.SERIAL0,
                 # SPIS mappings
                 NrfPsel(fun=NrfFun.SPIS_MISO, port=9, pin=5): Ctrlsel.SERIAL0,
@@ -202,7 +245,7 @@ def lookup_tables_get(soc: Soc) -> SocLookupTables:
                 # SPIM mappings
                 NrfPsel(fun=NrfFun.SPIM_MOSI, port=9, pin=0): Ctrlsel.CAN_TDM_SERIAL2,
                 NrfPsel(fun=NrfFun.SPIM_MISO, port=9, pin=2): Ctrlsel.CAN_TDM_SERIAL2,
-                GpiosProp(name="cs-gpios", port=9, pin=3): Ctrlsel.CAN_TDM_SERIAL2,
+                NrfPsel(fun=NrfFun.SPIM_CSN, port=9, pin=3): Ctrlsel.CAN_TDM_SERIAL2,
                 NrfPsel(fun=NrfFun.SPIM_SCK, port=9, pin=1): Ctrlsel.CAN_TDM_SERIAL2,
                 # SPIS mappings
                 NrfPsel(fun=NrfFun.SPIS_MISO, port=9, pin=0): Ctrlsel.CAN_TDM_SERIAL2,
@@ -284,17 +327,17 @@ def lookup_tables_get(soc: Soc) -> SocLookupTables:
                 # SPIM P6 mappings
                 NrfPsel(fun=NrfFun.SPIM_MOSI, port=6, pin=8): Ctrlsel.SERIAL0,
                 NrfPsel(fun=NrfFun.SPIM_MISO, port=6, pin=7): Ctrlsel.SERIAL0,
-                GpiosProp(name="cs-gpios", port=6, pin=5): Ctrlsel.SERIAL0,
+                NrfPsel(fun=NrfFun.SPIM_CSN, port=6, pin=5): Ctrlsel.SERIAL0,
                 NrfPsel(fun=NrfFun.SPIM_SCK, port=6, pin=1): Ctrlsel.SERIAL0,
                 # SPIM P7 mappings
                 NrfPsel(fun=NrfFun.SPIM_MOSI, port=7, pin=7): Ctrlsel.SERIAL0,
                 NrfPsel(fun=NrfFun.SPIM_MISO, port=7, pin=6): Ctrlsel.SERIAL0,
-                GpiosProp(name="cs-gpios", port=7, pin=5): Ctrlsel.SERIAL0,
+                NrfPsel(fun=NrfFun.SPIM_CSN, port=7, pin=5): Ctrlsel.SERIAL0,
                 NrfPsel(fun=NrfFun.SPIM_SCK, port=7, pin=3): Ctrlsel.SERIAL0,
                 # SPIM P2 mappings
                 NrfPsel(fun=NrfFun.SPIM_MOSI, port=2, pin=6): Ctrlsel.SERIAL0,
                 NrfPsel(fun=NrfFun.SPIM_MISO, port=2, pin=5): Ctrlsel.SERIAL0,
-                GpiosProp(name="cs-gpios", port=2, pin=7): Ctrlsel.SERIAL0,
+                NrfPsel(fun=NrfFun.SPIM_CSN, port=2, pin=7): Ctrlsel.SERIAL0,
                 NrfPsel(fun=NrfFun.SPIM_SCK, port=2, pin=3): Ctrlsel.SERIAL0,
                 # UARTÈ P6 mappings
                 NrfPsel(fun=NrfFun.UART_TX, port=6, pin=8): Ctrlsel.SERIAL0,
@@ -317,21 +360,21 @@ def lookup_tables_get(soc: Soc) -> SocLookupTables:
                 # SPIM P6 mappings
                 NrfPsel(fun=NrfFun.SPIM_MOSI, port=6, pin=13): Ctrlsel.SERIAL0,
                 NrfPsel(fun=NrfFun.SPIM_MISO, port=6, pin=12): Ctrlsel.SERIAL0,
-                GpiosProp(name="cs-gpios", port=6, pin=10): Ctrlsel.SERIAL0,
+                NrfPsel(fun=NrfFun.SPIM_CSN, port=6, pin=10): Ctrlsel.SERIAL0,
                 NrfPsel(fun=NrfFun.SPIM_SCK, port=6, pin=2): Ctrlsel.SERIAL0,
                 # SPIM P7 mappings
                 NrfPsel(fun=NrfFun.SPIM_MOSI, port=7, pin=1): Ctrlsel.EXMIF_RADIO_SERIAL1,
                 NrfPsel(fun=NrfFun.SPIS_MISO, port=7, pin=1): Ctrlsel.EXMIF_RADIO_SERIAL1,
                 NrfPsel(fun=NrfFun.SPIM_MISO, port=7, pin=0): Ctrlsel.EXMIF_RADIO_SERIAL1,
                 NrfPsel(fun=NrfFun.SPIS_MOSI, port=7, pin=0): Ctrlsel.EXMIF_RADIO_SERIAL1,
-                GpiosProp(name="cs-gpios", port=7, pin=4): Ctrlsel.EXMIF_RADIO_SERIAL1,
+                NrfPsel(fun=NrfFun.SPIM_CSN, port=7, pin=4): Ctrlsel.EXMIF_RADIO_SERIAL1,
                 NrfPsel(fun=NrfFun.SPIS_CSN, port=7, pin=4): Ctrlsel.EXMIF_RADIO_SERIAL1,
                 NrfPsel(fun=NrfFun.SPIM_SCK, port=7, pin=2): Ctrlsel.EXMIF_RADIO_SERIAL1,
                 NrfPsel(fun=NrfFun.SPIS_SCK, port=7, pin=2): Ctrlsel.EXMIF_RADIO_SERIAL1,
                 # SPIM P2 mappings
                 NrfPsel(fun=NrfFun.SPIM_MOSI, port=2, pin=11): Ctrlsel.SERIAL0,
                 NrfPsel(fun=NrfFun.SPIM_MISO, port=2, pin=10): Ctrlsel.SERIAL0,
-                GpiosProp(name="cs-gpios", port=2, pin=8): Ctrlsel.SERIAL0,
+                NrfPsel(fun=NrfFun.SPIM_CSN, port=2, pin=8): Ctrlsel.SERIAL0,
                 NrfPsel(fun=NrfFun.SPIM_SCK, port=2, pin=2): Ctrlsel.SERIAL0,
             },
             # EXMIF
@@ -426,8 +469,16 @@ def lookup_tables_get(soc: Soc) -> SocLookupTables:
                 NrfPsel(fun=NrfFun.IGNORE, port=2, pin=10): Ctrlsel.CAN,
                 NrfPsel(fun=NrfFun.IGNORE, port=2, pin=11): Ctrlsel.CAN,
             },
+            # Coresight (TPIU)
+            0xBF04_0000: {
+                NrfPsel(fun=NrfFun.TPIU_CLOCK, port=7, pin=3): Ctrlsel.TND,
+                NrfPsel(fun=NrfFun.TPIU_DATA0, port=7, pin=4): Ctrlsel.TND,
+                NrfPsel(fun=NrfFun.TPIU_DATA1, port=7, pin=5): Ctrlsel.TND,
+                NrfPsel(fun=NrfFun.TPIU_DATA2, port=7, pin=6): Ctrlsel.TND,
+                NrfPsel(fun=NrfFun.TPIU_DATA3, port=7, pin=7): Ctrlsel.TND,
+            },
         }
-    elif soc == Soc.NRF9280:
+    elif family == Family.SERIES_NRF92X:
         ctrlsel_lookup = {
             # PWM120
             0x5F8E_4000: {
@@ -449,12 +500,12 @@ def lookup_tables_get(soc: Soc) -> SocLookupTables:
             # SPIM120/UARTE120
             0x5F8E_6000: {
                 # SPIM P2 mappings
-                GpiosProp(name="cs-gpios", port=2, pin=5): Ctrlsel.SERIAL0,
+                NrfPsel(fun=NrfFun.SPIM_CSN, port=2, pin=5): Ctrlsel.SERIAL0,
                 NrfPsel(fun=NrfFun.SPIM_MISO, port=2, pin=3): Ctrlsel.SERIAL0,
                 NrfPsel(fun=NrfFun.SPIM_MOSI, port=2, pin=4): Ctrlsel.SERIAL0,
                 NrfPsel(fun=NrfFun.SPIM_SCK, port=2, pin=0): Ctrlsel.SERIAL0,
                 # SPIM P6 mappings
-                GpiosProp(name="cs-gpios", port=6, pin=5): Ctrlsel.SERIAL0,
+                NrfPsel(fun=NrfFun.SPIM_CSN, port=6, pin=5): Ctrlsel.SERIAL0,
                 NrfPsel(fun=NrfFun.SPIM_MISO, port=6, pin=7): Ctrlsel.SERIAL0,
                 NrfPsel(fun=NrfFun.SPIM_MOSI, port=6, pin=8): Ctrlsel.SERIAL0,
                 NrfPsel(fun=NrfFun.SPIM_SCK, port=6, pin=1): Ctrlsel.SERIAL0,
@@ -472,12 +523,12 @@ def lookup_tables_get(soc: Soc) -> SocLookupTables:
             # SPIM121
             0x5F8E_7000: {
                 # P2
-                GpiosProp(name="cs-gpios", port=2, pin=6): Ctrlsel.SERIAL0,
+                NrfPsel(fun=NrfFun.SPIM_CSN, port=2, pin=6): Ctrlsel.SERIAL0,
                 NrfPsel(fun=NrfFun.SPIM_MISO, port=2, pin=8): Ctrlsel.SERIAL0,
                 NrfPsel(fun=NrfFun.SPIM_MOSI, port=2, pin=9): Ctrlsel.SERIAL0,
                 NrfPsel(fun=NrfFun.SPIM_SCK, port=2, pin=1): Ctrlsel.SERIAL0,
                 # P6
-                GpiosProp(name="cs-gpios", port=6, pin=10): Ctrlsel.SERIAL0,
+                NrfPsel(fun=NrfFun.SPIM_CSN, port=6, pin=10): Ctrlsel.SERIAL0,
                 NrfPsel(fun=NrfFun.SPIM_MISO, port=6, pin=12): Ctrlsel.SERIAL0,
                 NrfPsel(fun=NrfFun.SPIM_MOSI, port=6, pin=13): Ctrlsel.SERIAL0,
                 NrfPsel(fun=NrfFun.SPIM_SCK, port=6, pin=2): Ctrlsel.SERIAL0,
@@ -492,7 +543,7 @@ def lookup_tables_get(soc: Soc) -> SocLookupTables:
             # SPIM130/SPIS130/TWIM130/TWIS130/UARTE130
             0x5F9A_5000: {
                 # SPIM mappings
-                GpiosProp(name="cs-gpios", port=9, pin=1): Ctrlsel.SERIAL0,
+                NrfPsel(fun=NrfFun.SPIM_CSN, port=9, pin=1): Ctrlsel.SERIAL0,
                 NrfPsel(fun=NrfFun.SPIM_MISO, port=9, pin=2): Ctrlsel.SERIAL0,
                 NrfPsel(fun=NrfFun.SPIM_MOSI, port=9, pin=3): Ctrlsel.SERIAL0,
                 NrfPsel(fun=NrfFun.SPIM_SCK, port=9, pin=0): Ctrlsel.SERIAL0,

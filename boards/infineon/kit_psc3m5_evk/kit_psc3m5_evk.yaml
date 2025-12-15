@@ -14,4 +14,6 @@ toolchain:
   - gnuarmemb
 supported:
   - gpio
+  - spi
+  - uart
 vendor: infineon

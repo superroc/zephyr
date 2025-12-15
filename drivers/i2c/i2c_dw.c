@@ -128,7 +128,7 @@ static int i2c_dw_error_chk(const struct device *dev)
 		/* check 7bit NACK Tx Abort */
 		if (ic_txabrt_src.bits.ADDR7BNACK) {
 			dw->state |= I2C_DW_NACK;
-			LOG_ERR("NACK on %s", dev->name);
+			LOG_ERR_RATELIMIT("NACK on %s", dev->name);
 		}
 		/* check SDA stuck low Tx abort, need to do bus recover */
 		if (ic_txabrt_src.bits.SDASTUCKLOW) {
@@ -147,7 +147,7 @@ static int i2c_dw_error_chk(const struct device *dev)
 #if CONFIG_I2C_ALLOW_NO_STOP_TRANSACTIONS
 		dw->need_setup = true;
 #endif
-		LOG_ERR("IO Fail on %s", dev->name);
+		LOG_ERR_RATELIMIT("IO Fail on %s", dev->name);
 		return -EIO;
 	}
 	return 0;
@@ -605,6 +605,15 @@ static void i2c_dw_isr(const struct device *port)
 						i2c_dw_write_byte_non_blocking(port, data);
 					}
 				}
+			}
+		}
+
+		if (intr_stat.bits.stop_det) {
+			read_clr_stop_det(reg_base);
+			dw->state = I2C_DW_STATE_READY;
+			dw->read_in_progress = false;
+			if (slave_cb->stop) {
+				slave_cb->stop(dw->slave_cfg);
 			}
 		}
 #endif
@@ -1157,8 +1166,6 @@ static void i2c_dw_slave_read_clear_intr_bits(const struct device *dev)
 	union ic_interrupt_register intr_stat;
 	uint32_t reg_base = get_regs(dev);
 
-	const struct i2c_target_callbacks *slave_cb = dw->slave_cfg->callbacks;
-
 	intr_stat.raw = read_intr_stat(reg_base);
 
 	if (intr_stat.bits.tx_abrt) {
@@ -1189,15 +1196,6 @@ static void i2c_dw_slave_read_clear_intr_bits(const struct device *dev)
 	if (intr_stat.bits.activity) {
 		read_clr_activity(reg_base);
 		dw->state = I2C_DW_STATE_READY;
-	}
-
-	if (intr_stat.bits.stop_det) {
-		read_clr_stop_det(reg_base);
-		dw->state = I2C_DW_STATE_READY;
-		dw->read_in_progress = false;
-		if (slave_cb->stop) {
-			slave_cb->stop(dw->slave_cfg);
-		}
 	}
 
 	if (intr_stat.bits.start_det) {
@@ -1296,6 +1294,11 @@ static int i2c_dw_initialize(const struct device *dev)
 	uint32_t reg_base = get_regs(dev);
 
 	clear_bit_enable_en(reg_base);
+	/*
+	 * depending on the IP configuration, we may have to disable block mode in
+	 * controller mode
+	 */
+	clear_bit_enable_block(reg_base);
 
 	/* verify that we have a valid DesignWare register first */
 	if (read_comp_type(reg_base) != I2C_DW_MAGIC_KEY) {

@@ -122,6 +122,7 @@ calaosystems	CALAO Systems SAS
 calxeda	Calxeda
 canaan	Canaan, Inc.
 caninos	Caninos Loucos Program
+canis	Canis Automotive Labs
 capella	Capella Microsystems, Inc
 cascoda	Cascoda, Ltd.
 catalyst	Catalyst Semiconductor, Inc.
@@ -151,6 +152,7 @@ cnxt	Conexant Systems, Inc.
 colorfly	Colorful GRP, Shenzhen Xueyushi Technology Ltd.
 compulab	CompuLab Ltd.
 contextualelectronics	Contextual Electronics
+coredevices	Core Devices LLC
 coreriver	CORERIVER Semiconductor Co.,Ltd.
 corpro	Chengdu Corpro Technology Co., Ltd.
 cortina	Cortina Systems, Inc.
@@ -201,6 +203,7 @@ eckelmann	Eckelmann AG
 edt	Emerging Display Technologies
 eeti	eGalax_eMPIA Technology Inc
 efinix	Efinix Inc
+egis	Egis Technology Inc
 einfochips	Einfochips
 elan	Elan Microelectronic Corp.
 electronut	Electronut Labs
@@ -287,6 +290,7 @@ hamamatsu	Hamamatsu Photonics K.K.
 hannstar	HannStar Display Corporation
 haoyu	Haoyu Microelectronic Co. Ltd.
 hardkernel	Hardkernel Co., Ltd
+hazard3	Hazard3 by Luke Wren
 heltec	Chengdu Heltec Automation Technology Co., Ltd.
 hideep	HiDeep Inc.
 himax	Himax Technologies, Inc.
@@ -444,6 +448,7 @@ miramems	MiraMEMS Sensing Technology Co., Ltd.
 mitsubishi	Mitsubishi Electric Corporation
 modtronix	Modtronix Engineering
 mosaixtech	Mosaix Technologies, Inc.
+motorcomm	Motorcomm Electronic Technology Co., Ltd.
 motorola	Motorola, Inc.
 moxa	Moxa Inc.
 mpl	MPL AG
@@ -492,6 +497,7 @@ okaya	Okaya Electric America, Inc.
 oki	Oki Electric Industry Co., Ltd.
 olimex	OLIMEX Ltd.
 olpc	One Laptop Per Child
+omron	OMRON Corporation
 onion	Onion Corporation
 onnn	ON Semiconductor Corp.
 ontat	On Tat Industrial Company
@@ -516,6 +522,7 @@ panasonic	Panasonic Corporation
 parade	Parade Technologies Inc.
 parallax	Parallax Inc.
 particle	Particle.io
+pcbcupid	PCB Cupid
 pda	Precision Design Associates, Inc.
 peacefair	Ningbo Peacefair Electronic Technology Co., Ltd
 peregrine	Peregrine Consultoria e Servicos
@@ -599,6 +606,7 @@ sandisk	Sandisk Corporation
 satoz	Satoz International Co., Ltd
 sbs	Smart Battery System
 sc	Space Cubics Inc.
+scdz	Shenzhen Qiushi IoT Technology Co., Ltd.
 schindler	Schindler
 sciosense	Sciosense B.V.
 seagate	Seagate Technology PLC
@@ -653,6 +661,7 @@ solomon	Solomon Systech Limited
 sony	Sony Corporation
 spansion	Spansion Inc.
 sparkfun	SparkFun Electronics
+spinalhdl	SpinalHDL
 sprd	Spreadtrum Communications Inc.
 sqn	Sequans Communications
 sst	Silicon Storage Technology, Inc.
@@ -691,6 +700,7 @@ thine	THine Electronics, Inc.
 thingyjp	thingy.jp
 ti	Texas Instruments
 tianma	Tianma Micro-electronics Co., Ltd.
+titanmec	Shenzhen Titan Micro Electronics Co., Ltd.
 tlm	Trusted Logic Mobility
 tmt	Tecon Microprocessor Technologies, LLC.
 topeet	Topeet
@@ -775,6 +785,7 @@ xingbangda	Shenzhen Xingbangda Display Technology Co., Ltd
 xinpeng	Shenzhen Xinpeng Technology Co., Ltd
 xiphera	Xiphera Ltd.
 xlnx	Xilinx
+xmc	Wuhan Xinxin Semiconductor Manufacturing Co., Ltd.
 xnano	Xnano
 xptek	Shenzhen Xptek Technology Co., Ltd
 xuantie	Alibaba Xuantie

@@ -12,6 +12,8 @@
 #include <zephyr/dt-bindings/pwm/pwm.h>
 #include <mem.h>
 #include <zephyr/dt-bindings/i2c/i2c.h>
+#include <freq.h>
+#include <zephyr/dt-bindings/gpio/realtek-gpio.h>
 
 / {
 	cpus {
@@ -21,7 +23,7 @@
 		cpu0: cpu@0 {
 			compatible = "arm,cortex-m33f";
 			reg = <0>;
-			cpu-power-states = <&idle &suspend_to_ram>;
+			cpu-power-states = <&idle>;
 		};
 
 		power-states {
@@ -29,12 +31,6 @@
 				compatible = "zephyr,power-state";
 				power-state-name = "suspend-to-idle";
 				min-residency-us = <100000000>;
-			};
-
-			suspend_to_ram: suspend_to_ram {
-				compatible = "zephyr,power-state";
-				power-state-name = "suspend-to-ram";
-				min-residency-us = <250000000>;
 			};
 		};
 	};
@@ -171,6 +167,7 @@
 
 		espi0: espi0@400b1000 {
 			compatible = "realtek,rts5912-espi";
+			cs-gpios = <RTS5912_GPIO004 0>;
 			status = "disabled";
 
 			reg = <0x400b1000 0x200		/* espi target */
@@ -275,11 +272,19 @@
 			status = "disabled";
 		};
 
+		spi0: spi@40010400 {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			compatible = "realtek,rts5912-spi";
+			reg = <0x40010400 0x3C>;
+			status = "disabled";
+		};
+
 		uart0: uart@40010100 {
 			compatible = "ns16550";
 			reg = <0x40010100 0x100>;
 			reg-shift = <2>;
-			clock-frequency = <25000000>;
+			clock-frequency = <DT_FREQ_M(100)>;
 			interrupts = <191 0>;
 			status = "disabled";
 		};
@@ -291,6 +296,7 @@
 			clocks = <&sccon RTS5912_SCCON_UART UART0_CLKPWR>;
 			clock-names = "uart0";
 			status = "disabled";
+			uart-dev = <&uart0>;
 		};
 
 		pinctrl: pin-controller@40090000 {
@@ -533,6 +539,8 @@
 			status = "disabled";
 			#address-cells = <1>;
 			#size-cells = <0>;
+			lcnt-offset = <35>;
+			hcnt-offset = <35>;
 		};
 
 		i2c_1: i2c@4000d200 {
@@ -544,6 +552,8 @@
 			status = "disabled";
 			#address-cells = <1>;
 			#size-cells = <0>;
+			lcnt-offset = <35>;
+			hcnt-offset = <35>;
 		};
 
 		i2c_2: i2c@4000d400 {
@@ -555,6 +565,8 @@
 			status = "disabled";
 			#address-cells = <1>;
 			#size-cells = <0>;
+			lcnt-offset = <35>;
+			hcnt-offset = <35>;
 		};
 
 		i2c_3: i2c@4000d600 {
@@ -566,6 +578,8 @@
 			status = "disabled";
 			#address-cells = <1>;
 			#size-cells = <0>;
+			lcnt-offset = <35>;
+			hcnt-offset = <35>;
 		};
 
 		i2c_4: i2c@4000d800 {
@@ -577,6 +591,8 @@
 			status = "disabled";
 			#address-cells = <1>;
 			#size-cells = <0>;
+			lcnt-offset = <35>;
+			hcnt-offset = <35>;
 		};
 
 		i2c_5: i2c@4000da00 {
@@ -588,6 +604,8 @@
 			status = "disabled";
 			#address-cells = <1>;
 			#size-cells = <0>;
+			lcnt-offset = <35>;
+			hcnt-offset = <35>;
 		};
 
 		i2c_6: i2c@4000dc00 {
@@ -599,6 +617,8 @@
 			status = "disabled";
 			#address-cells = <1>;
 			#size-cells = <0>;
+			lcnt-offset = <35>;
+			hcnt-offset = <35>;
 		};
 
 		i2c_7: i2c@4000de00 {
@@ -610,6 +630,8 @@
 			status = "disabled";
 			#address-cells = <1>;
 			#size-cells = <0>;
+			lcnt-offset = <35>;
+			hcnt-offset = <35>;
 		};
 
 		sha0: crypto@40000000 {

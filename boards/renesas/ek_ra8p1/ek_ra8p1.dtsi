@@ -3,8 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <dt-bindings/gpio/gpio.h>
-#include <dt-bindings/input/input-event-codes.h>
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/gpio/arducam-ffc-40pin-connector.h>
+#include <zephyr/dt-bindings/input/input-event-codes.h>
 #include "ek_ra8p1-pinctrl.dtsi"
 #include <zephyr/dt-bindings/memory-attr/memory-attr-arm.h>
 #include <zephyr/dt-bindings/memory-controller/renesas,ra-sdram.h>
@@ -53,6 +54,14 @@
 		reg = <0x68000000 DT_SIZE_M(64)>;
 		zephyr,memory-region = "SDRAM";
 		status = "okay";
+	};
+
+	arducam_ffc_40pin_connector: arducam-ffc-40pin-connector {
+		compatible = "arducam,ffc-40pin-connector";
+		#gpio-cells = <2>;
+		gpio-map-mask = <0xffffffff 0xffffffc0>;
+		gpio-map-pass-thru = <0x0 0x3f>;
+		gpio-map = <ARDUCAM_FFC_40PIN_RESET 0 &ioport7 9 0>;
 	};
 };
 
@@ -104,28 +113,6 @@
 	};
 };
 
-&flash {
-	flash0: flash@2000000 {
-		compatible = "soc-nv-flash";
-		reg = <0x2000000 0x80000>;
-	};
-
-	flash1: flash@2080000 {
-		compatible = "soc-nv-flash";
-		reg = <0x2080000 0x80000>;
-	};
-};
-
-&sram {
-	sram0: sram@22000000 {
-		reg = <0x22000000 0xea000>;
-	};
-
-	sram1: sram@220ea000 {
-		reg = <0x220ea000 0xea000>;
-	};
-};
-
 &sciclk {
 	clocks = <&pll2r>;
 	div = <4>;
@@ -156,6 +143,12 @@
 
 &ioport1 {
 	status = "okay";
+
+	mipi_dphy_gpio: mipi-dphy-enable {
+		gpio-hog;
+		gpios = <8 GPIO_ACTIVE_LOW>;
+		output-low;
+	};
 };
 
 &ioport2 {
@@ -188,6 +181,22 @@
 
 &ioporta {
 	status = "okay";
+};
+
+&usbfs {
+	pinctrl-0 = <&usbfs_default>;
+	pinctrl-names = "default";
+	maximum-speed = "full-speed";
+};
+
+&usbhs {
+	pinctrl-0 = <&usbhs_default>;
+	pinctrl-names = "default";
+	maximum-speed = "high-speed";
+};
+
+&usbhs_phy {
+	phys-clock-src = "xtal";
 };
 
 &sdram {

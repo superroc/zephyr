@@ -103,6 +103,27 @@ typedef int (*_poller_cb_t)(struct k_poll_event *event, uint32_t state);
  * @{
  */
 
+/**
+ * @brief Resets thread longest frame usage data for specified thread
+ *
+ * This routine resets the longest frame value statistic
+ * after printing to zero, enabling observation of the
+ * longest frame from the most recent interval rather than
+ * the longest frame since startup.
+ *
+ * @param thread Pointer to the thread to reset counter.
+ *
+ * @note @kconfig{CONFIG_THREAD_ANALYZER_LONG_FRAME_PER_INTERVAL} must
+ * be set for this function to be effective.
+ */
+static inline void
+	k_thread_runtime_stats_longest_frame_reset(__maybe_unused struct k_thread *thread)
+{
+#ifdef CONFIG_SCHED_THREAD_USAGE_ANALYSIS
+	thread->base.usage.longest = 0ULL;
+#endif
+}
+
 typedef void (*k_thread_user_cb_t)(const struct k_thread *thread,
 				   void *user_data);
 
@@ -511,6 +532,108 @@ static inline void k_thread_heap_assign(struct k_thread *thread,
  */
 __syscall int k_thread_stack_space_get(const struct k_thread *thread,
 				       size_t *unused_ptr);
+
+/**
+ * @brief Set the unused stack threshold for a thread as a percentage
+ *
+ * This function sets the unused stack safety usage threshold for a thread as a
+ * percentage of the specified thread's total stack size. When performing a
+ * runtime stack safety usage check, if the thread's unused stack is detected
+ * to be below this threshold, then a runtime stack safety usage hook will be
+ * invoked. Setting this threshold to 0% disables the hook.
+ *
+ * @param thread Thread on which to set the threshold
+ * @param pct Percentage of total stack size to use as threshold
+ *
+ * @retval 0 on success
+ * @retval -EINVAL if @p pct exceeds 99%
+ */
+__syscall int k_thread_runtime_stack_unused_threshold_pct_set(struct k_thread *thread,
+							      uint32_t pct);
+
+/**
+ * @brief Set the unused stack threshold for a thread as a number of bytes
+ *
+ * This function sets the unused stack safety usage threshold for a thread as a
+ * number of bytes. When performing a runtime stack safety usage check, if the
+ * thread's unused stack is detected to be below this threshold, then a runtime
+ * stack safety usage hook will be invoked. Setting this threshold to 0 bytes
+ * disables the hook.
+ *
+ * @param thread Thread on which to set the threshold
+ * @param threshold Number of bytes to use as threshold
+ *
+ * @retval 0 on success
+ * @retval -EINVAL if @p threshold exceeds stack size
+ */
+__syscall int k_thread_runtime_stack_unused_threshold_set(struct k_thread *thread,
+							  size_t threshold);
+
+/**
+ * @brief Get the unused stack usage threshold (in bytes)
+ *
+ * This function retrieves the unused stack usage threshold for a thread as a
+ * number of bytes. A value of 0 bytes indicates thread does not have an
+ * unused stack usage threshold and that the runtime stack safety usage hook is
+ * disabled for this thread.
+ *
+ * @param thread Thread from which to retrieve the threshold
+ *
+ * @retval Unused stack threshold (in bytes)
+ */
+__syscall size_t k_thread_runtime_stack_unused_threshold_get(struct k_thread *thread);
+
+/**
+ * @brief Thread stack safety handler type
+ *
+ * This type defines the prototype for a custom thread stack safety handler.
+ * The handler is invoked when a thread's unused stack space is detected to
+ * have crossed below its configured threshold.
+ *
+ * @param thread Thread whose stack has crossed the safety threshold
+ * @param unused_space Amount of unused stack space remaining
+ * @param arg Pointer to user defined argument passed to the handler
+ */
+typedef void (*k_thread_stack_safety_handler_t)(const struct k_thread *thread,
+						size_t unused_space, void *arg);
+
+/**
+ * @brief Run the full stack safety check on a thread
+ *
+ * This function scans the specified thread's stack to determine how much of it
+ * remains unused. If the unused stack space is found to be less than the
+ * thread's configured threshold then the specified handler is executed.
+ *
+ * @param thread Thread whose stack to check
+ * @param unused_ptr Amount of unused stack space remaining
+ * @param handler Custom handler to invoke if threshold crossed
+ * @param arg Argument to pass to handler
+ *
+ * @return 0 on success, -ENOTSUP if forbidden by hardware policy
+ */
+int k_thread_runtime_stack_safety_full_check(const struct k_thread *thread,
+					     size_t *unused_ptr,
+					     k_thread_stack_safety_handler_t handler,
+					     void *arg);
+
+/**
+ * @brief Run the an abbreviated stack safety check on a thread
+ *
+ * This function scans the specified thread's stack for evidence that it has
+ * crossed its configured threshold of unused stack space. If this evidence is
+ * found, the specified handler is executed.
+ *
+ * @param thread Thread whose stack to check
+ * @param unused_ptr Amount of unused stack space remaining
+ * @param handler Custom handler to invoke if threshold crossed
+ * @param arg Argument to pass to handler
+ *
+ * @return 0 on success, -ENOTSUP if forbidden by hardware policy
+ */
+int k_thread_runtime_stack_safety_threshold_check(const struct k_thread *thread,
+						  size_t *unused_ptr,
+						  k_thread_stack_safety_handler_t handler,
+						  void *arg);
 #endif
 
 #if (K_HEAP_MEM_POOL_SIZE > 0)
@@ -667,6 +790,43 @@ __attribute_const__
 __syscall k_tid_t k_sched_current_thread_query(void);
 
 /**
+ * @brief Test whether startup is in the before-main-task phase.
+ *
+ * This routine allows the caller to customize its actions, depending on
+ * whether it being invoked before the kernel is fully active.
+ *
+ * @funcprops \isr_ok
+ *
+ * @return true if invoked before post-kernel initialization
+ * @return false if invoked during/after post-kernel initialization
+ */
+static inline bool k_is_pre_kernel(void)
+{
+	extern bool z_sys_post_kernel; /* in init.c */
+
+	/*
+	 * If called from userspace, it must be post kernel.
+	 * This guard is necessary because z_sys_post_kernel memory
+	 * is not accessible to user threads.
+	 */
+	if (k_is_user_context()) {
+		return false;
+	}
+
+	/*
+	 * Some compilers might optimize by pre-reading
+	 * z_sys_post_kernel. This is absolutely not desirable.
+	 * We are trying to avoid reading it if we are in user
+	 * context as reading z_sys_post_kernel in user context
+	 * will result in access fault. So add a compiler barrier
+	 * here to stop that kind of optimizations.
+	 */
+	compiler_barrier();
+
+	return !z_sys_post_kernel;
+}
+
+/**
  * @brief Get thread ID of the current thread.
  *
  * @return ID of current thread.
@@ -675,6 +835,8 @@ __syscall k_tid_t k_sched_current_thread_query(void);
 __attribute_const__
 static inline k_tid_t k_current_get(void)
 {
+	__ASSERT(!k_is_pre_kernel(), "k_current_get called pre-kernel");
+
 #ifdef CONFIG_CURRENT_THREAD_USE_TLS
 
 	/* Thread-local cache of current thread ID, set in z_thread_entry() */
@@ -799,7 +961,7 @@ struct _static_thread_data {
 			       entry, p1, p2, p3,			\
 			       prio, options, delay)			\
 	struct k_thread _k_thread_obj_##name;				\
-	STRUCT_SECTION_ITERABLE(_static_thread_data,			\
+	const STRUCT_SECTION_ITERABLE(_static_thread_data,		\
 				_k_thread_data_##name) =		\
 		Z_THREAD_INITIALIZER(&_k_thread_obj_##name,		\
 				     _k_thread_stack_##name, stack_size,\
@@ -927,7 +1089,7 @@ __syscall void k_thread_priority_set(k_tid_t thread, int prio);
 
 #ifdef CONFIG_SCHED_DEADLINE
 /**
- * @brief Set deadline expiration time for scheduler
+ * @brief Set relative deadline expiration time for scheduler
  *
  * This sets the "deadline" expiration as a time delta from the
  * current time, in the same units used by k_cycle_get_32().  The
@@ -951,8 +1113,7 @@ __syscall void k_thread_priority_set(k_tid_t thread, int prio);
  * above this call, which is simply input to the priority selection
  * logic.
  *
- * @note You should enable @kconfig{CONFIG_SCHED_DEADLINE} in your project
- * configuration.
+ * @kconfig_dep{CONFIG_SCHED_DEADLINE}
  *
  * @param thread A thread on which to set the deadline
  * @param deadline A time delta, in cycle units
@@ -961,7 +1122,7 @@ __syscall void k_thread_priority_set(k_tid_t thread, int prio);
 __syscall void k_thread_deadline_set(k_tid_t thread, int deadline);
 
 /**
- * @brief Set deadline expiration time for scheduler
+ * @brief Set absolute deadline expiration time for scheduler
  *
  * This sets the "deadline" expiration as a timestamp in the same
  * units used by k_cycle_get_32(). The scheduler (when deadline scheduling
@@ -985,7 +1146,7 @@ __syscall void k_thread_deadline_set(k_tid_t thread, int deadline);
  *
  * @note Even if a provided timestamp is in the past, the kernel will
  * still schedule threads with deadlines in order from the earliest to
- * the latest
+ * the latest.
  *
  * @note Despite the API naming, the scheduler makes no guarantees
  * the thread WILL be scheduled within that deadline, nor does it take
@@ -995,8 +1156,7 @@ __syscall void k_thread_deadline_set(k_tid_t thread, int deadline);
  * above this call, which is simply input to the priority selection
  * logic.
  *
- * @note You should enable @kconfig_dep{CONFIG_SCHED_DEADLINE} in your project
- * configuration.
+ * @kconfig_dep{CONFIG_SCHED_DEADLINE}
  *
  * @param thread A thread on which to set the deadline
  * @param deadline A timestamp, in cycle units
@@ -1254,24 +1414,6 @@ bool k_is_in_isr(void);
  * @return Non-zero if invoked by a preemptible thread.
  */
 __syscall int k_is_preempt_thread(void);
-
-/**
- * @brief Test whether startup is in the before-main-task phase.
- *
- * This routine allows the caller to customize its actions, depending on
- * whether it being invoked before the kernel is fully active.
- *
- * @funcprops \isr_ok
- *
- * @return true if invoked before post-kernel initialization
- * @return false if invoked during/after post-kernel initialization
- */
-static inline bool k_is_pre_kernel(void)
-{
-	extern bool z_sys_post_kernel; /* in init.c */
-
-	return !z_sys_post_kernel;
-}
 
 /**
  * @}
@@ -3932,6 +4074,7 @@ int k_work_queue_unplug(struct k_work_q *queue);
  * @retval -EALREADY if the work queue was not started (or already stopped)
  * @retval -EBUSY if the work queue is actively processing work items
  * @retval -ETIMEDOUT if the work queue did not stop within the stipulated timeout
+ * @retval -ENOSUP if the work queue is essential
  */
 int k_work_queue_stop(struct k_work_q *queue, k_timeout_t timeout);
 
@@ -4398,9 +4541,9 @@ struct z_work_canceller {
  * from both the caller thread and the work queue thread.
  *
  * @note If CONFIG_KERNEL_COHERENCE is enabled the object must be allocated in
- * coherent memory; see arch_mem_coherent().  The stack on these architectures
- * is generally not coherent.  be stack-allocated.  Violations are detected by
- * runtime assertion.
+ * coherent memory; see sys_cache_is_mem_coherent().  The stack on these
+ * architectures is generally not coherent.  be stack-allocated.  Violations are
+ * detected by runtime assertion.
  */
 struct k_work_sync {
 	union {
@@ -5664,6 +5807,8 @@ int k_mem_slab_alloc(struct k_mem_slab *slab, void **mem,
  * This routine releases a previously allocated memory block back to its
  * associated memory slab.
  *
+ * @funcprops \isr_ok
+ *
  * @param slab Address of the memory slab.
  * @param mem Pointer to the memory block (as returned by k_mem_slab_alloc()).
  */
@@ -5674,6 +5819,8 @@ void k_mem_slab_free(struct k_mem_slab *slab, void *mem);
  *
  * This routine gets the number of memory blocks that are currently
  * allocated in @a slab.
+ *
+ * @funcprops \isr_ok
  *
  * @param slab Address of the memory slab.
  *
@@ -5689,6 +5836,8 @@ static inline uint32_t k_mem_slab_num_used_get(struct k_mem_slab *slab)
  *
  * This routine gets the maximum number of memory blocks that were
  * allocated in @a slab.
+ *
+ * @funcprops \isr_ok
  *
  * @param slab Address of the memory slab.
  *
@@ -5710,6 +5859,8 @@ static inline uint32_t k_mem_slab_max_used_get(struct k_mem_slab *slab)
  * This routine gets the number of memory blocks that are currently
  * unallocated in @a slab.
  *
+ * @funcprops \isr_ok
+ *
  * @param slab Address of the memory slab.
  *
  * @return Number of unallocated memory blocks.
@@ -5723,6 +5874,8 @@ static inline uint32_t k_mem_slab_num_free_get(struct k_mem_slab *slab)
  * @brief Get the memory stats for a memory slab
  *
  * This routine gets the runtime memory usage stats for the slab @a slab.
+ *
+ * @funcprops \isr_ok
  *
  * @param slab Address of the memory slab
  * @param stats Pointer to memory into which to copy memory usage statistics
@@ -5738,6 +5891,8 @@ int k_mem_slab_runtime_stats_get(struct k_mem_slab *slab, struct sys_memory_stat
  *
  * This routine resets the maximum memory usage for the slab @a slab to its
  * current usage.
+ *
+ * @funcprops \isr_ok
  *
  * @param slab Address of the memory slab
  *
@@ -5887,10 +6042,14 @@ void *k_heap_realloc(struct k_heap *h, void *ptr, size_t bytes, k_timeout_t time
  */
 void k_heap_free(struct k_heap *h, void *mem) __attribute_nonnull(1);
 
-/* Hand-calculated minimum heap sizes needed to return a successful
- * 1-byte allocation.  See details in lib/os/heap.[ch]
+/* Minimum heap sizes needed to return a successful 1-byte allocation.
+ * Assumes a chunk aligned (8 byte) memory buffer.
  */
+#ifdef CONFIG_SYS_HEAP_RUNTIME_STATS
+#define Z_HEAP_MIN_SIZE ((sizeof(void *) > 4) ? 80 : 52)
+#else
 #define Z_HEAP_MIN_SIZE ((sizeof(void *) > 4) ? 56 : 44)
+#endif /* CONFIG_SYS_HEAP_RUNTIME_STATS */
 
 /**
  * @brief Define a static k_heap in the specified linker section
