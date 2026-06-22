@@ -7,6 +7,7 @@
 
 #include <stdio.h>
 #include <zephyr/net/socket_service.h>
+#include <zephyr/net/net_log.h>
 
 #if defined(CONFIG_MIDI2_UMP_STREAM_RESPONDER)
 #include <ump_stream_responder.h>
@@ -104,14 +105,19 @@ static bool netmidi2_auth_session(const struct netmidi2_session *sess,
 	const uint8_t *auth_digest = buf->data;
 	const struct netmidi2_user *user;
 	uint8_t output[NETMIDI2_DIGEST_SIZE];
-	struct hash_ctx ctx = {.flags = crypto_query_hwcaps(hasher)};
-	struct hash_pkt hash = {.out_buf = output, .ctx = &ctx};
+	struct hash_ctx ctx = {0};
+	struct hash_pkt hash = {0};
 	int ret;
 
 	if (hasher == NULL) {
 		SESS_LOG_ERR(sess, "mbedtls crypto pseudo-device unavailable");
 		return false;
 	}
+
+	/* Assign values after the NULL check */
+	ctx.flags = crypto_query_hwcaps(hasher);
+	hash.out_buf = output;
+	hash.ctx = &ctx;
 
 	if (buf->len < NETMIDI2_DIGEST_SIZE || payload_len < NETMIDI2_DIGEST_SIZE) {
 		SESS_LOG_ERR(sess, "Incomplete authentication digest");
@@ -199,7 +205,7 @@ static inline struct netmidi2_session *netmidi2_match_session(struct netmidi2_ep
 	for (size_t i = 0; i < CONFIG_NETMIDI2_HOST_MAX_CLIENTS; i++) {
 		if (ep->peers[i].addr_len == peer_addr_len &&
 		    memcmp(&ep->peers[i].addr, peer_addr, peer_addr_len) == 0) {
-			LOG_DBG("Found matching client session %d", i);
+			LOG_DBG("Found matching client session %zu", i);
 			return &ep->peers[i];
 		}
 	}
@@ -237,7 +243,7 @@ static inline struct netmidi2_session *netmidi2_try_alloc_session(struct netmidi
 			sess->addr_len = peer_addr_len;
 			sess->ep = ep;
 			memcpy(&sess->addr, peer_addr, peer_addr_len);
-			SESS_LOG_INF(sess, "new client session (%d)", i);
+			SESS_LOG_INF(sess, "new client session (%zu)", i);
 			return sess;
 		}
 	}

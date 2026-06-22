@@ -18,6 +18,7 @@
 #include <zephyr/sys/bitarray.h>
 #include <zephyr/sys/check.h>
 #include <zephyr/sys/math_extras.h>
+#include <zephyr/sys/minmax.h>
 #include <zephyr/timing/timing.h>
 #include <zephyr/arch/common/init.h>
 #include <zephyr/logging/log.h>
@@ -873,7 +874,7 @@ size_t k_mem_free_get(void)
  * @param[in] phys Physical address of region to be mapped, aligned to MMU_PAGE_SIZE
  * @param[in] size Size of region to be mapped, aligned to MMU_PAGE_SIZE
  *
- * @retval alignment to apply on the virtual address of this region
+ * @return alignment to apply on the virtual address of this region
  */
 static size_t virt_region_align(uintptr_t phys, size_t size)
 {

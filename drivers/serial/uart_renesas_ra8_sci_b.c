@@ -495,7 +495,7 @@ static int uart_ra_sci_b_irq_is_pending(const struct device *dev)
 	return tx_pending || rx_pending;
 }
 
-static int uart_ra_sci_b_irq_update(const struct device *dev)
+static void uart_ra_sci_b_irq_update(const struct device *dev)
 {
 	struct uart_ra_sci_b_data *data = dev->data;
 	const struct uart_ra_sci_b_config *cfg = dev->config;
@@ -514,8 +514,6 @@ static int uart_ra_sci_b_irq_update(const struct device *dev)
 	}
 
 	cfg->regs->CFCLR = cfclr;
-
-	return 1;
 }
 
 static void uart_ra_sci_b_irq_callback_set(const struct device *dev,
@@ -963,6 +961,7 @@ static int uart_ra_sci_b_pm_action(const struct device *dev, enum pm_device_acti
 		break;
 
 	case PM_DEVICE_ACTION_RESUME:
+	{
 		/* Reinitialize the device */
 		int ret = uart_ra_sci_b_apply_config(&data->uart_config, &data->fsp_config,
 						     &data->fsp_config_extend,
@@ -974,6 +973,7 @@ static int uart_ra_sci_b_pm_action(const struct device *dev, enum pm_device_acti
 		fsp_err = R_SCI_B_UART_Open(&data->sci, &data->fsp_config);
 		__ASSERT(fsp_err == 0, "sci_uart: initialization: open failed");
 		break;
+	}
 
 	default:
 		return -ENOTSUP;

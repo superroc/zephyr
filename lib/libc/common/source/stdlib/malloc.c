@@ -106,8 +106,8 @@ static POOL_SECTION unsigned char __aligned(HEAP_ALIGN) malloc_arena[HEAP_SIZE];
 extern char _heap_sentry[];
 #    define HEAP_SIZE  ROUND_DOWN((POINTER_TO_UINT(_heap_sentry) - HEAP_BASE), HEAP_ALIGN)
 #   else
-#    define HEAP_SIZE	ROUND_DOWN((KB((size_t) CONFIG_SRAM_SIZE) -	\
-		((size_t) HEAP_BASE - (size_t) CONFIG_SRAM_BASE_ADDRESS)), HEAP_ALIGN)
+#    define HEAP_SIZE	ROUND_DOWN((size_t) DT_CHOSEN_SRAM_SIZE -	\
+		((size_t) HEAP_BASE - (size_t) DT_CHOSEN_SRAM_ADDR), HEAP_ALIGN)
 #   endif /* else CONFIG_XTENSA */
 
 #  endif /* else CONFIG_COMMON_LIBC_MALLOC_ARENA_SIZE > 0 */
@@ -261,6 +261,23 @@ void free(void *ptr)
 	sys_heap_free(&z_malloc_heap, ptr);
 	malloc_unlock();
 }
+
+#ifdef CONFIG_SYS_HEAP_RUNTIME_STATS
+
+int malloc_runtime_stats_get(struct sys_memory_stats *stats)
+{
+	int ret;
+
+	malloc_lock();
+
+	ret = sys_heap_runtime_stats_get(&z_malloc_heap, stats);
+
+	malloc_unlock();
+
+	return ret;
+}
+
+#endif /* CONFIG_SYS_HEAP_RUNTIME_STATS */
 
 SYS_INIT(malloc_prepare, POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_LIBC);
 #else /* No malloc arena */

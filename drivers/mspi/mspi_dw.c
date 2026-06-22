@@ -155,10 +155,16 @@ DEFINE_MM_REG_WR(dmardlr,	0x54)
 DEFINE_MM_REG_WR(xip_incr_inst,		0x100)
 DEFINE_MM_REG_WR(xip_wrap_inst,		0x104)
 DEFINE_MM_REG_WR(xip_ctrl,		0x108)
+#if SUPPORTS_XIP_SER
+DEFINE_MM_REG_WR(xip_ser,		0x10c)
+#endif
 DEFINE_MM_REG_WR(xip_write_incr_inst,	0x140)
 DEFINE_MM_REG_WR(xip_write_wrap_inst,	0x144)
 DEFINE_MM_REG_WR(xip_write_ctrl,	0x148)
 #endif
+
+/* Ceiling division by 32 */
+#define CEIL_DIV_32(x) (((x) + 31U) >> 5)
 
 #include "mspi_dw_vendor_specific.h"
 
@@ -256,8 +262,7 @@ static void async_packet_work_handler(struct k_work *work)
 }
 #endif /* defined(CONFIG_MULTITHREADING) */
 
-static void tx_data(const struct device *dev,
-		    const struct mspi_xfer_packet *packet)
+static void tx_data(const struct device *dev)
 {
 	struct mspi_dw_data *dev_data = dev->data;
 	const struct mspi_dw_config *dev_config = dev->config;
@@ -365,14 +370,13 @@ static bool tx_dummy_bytes(const struct device *dev, bool *repeat)
 	return true;
 }
 
-static bool read_rx_fifo(const struct device *dev,
-			 const struct mspi_xfer_packet *packet)
+static bool read_rx_fifo(const struct device *dev)
 {
 	struct mspi_dw_data *dev_data = dev->data;
 	const struct mspi_dw_config *dev_config = dev->config;
 	uint8_t bytes_to_discard = dev_data->bytes_to_discard;
 	uint8_t *buf_pos = dev_data->buf_pos;
-	const uint8_t *buf_end = &packet->data_buf[packet->num_bytes];
+	const uint8_t *buf_end = dev_data->buf_end;
 	uint8_t bytes_per_frame_exp = dev_data->bytes_per_frame_exp;
 	uint32_t remaining_frames;
 	uint32_t in_fifo = FIELD_GET(RXFLR_RXTFL_MASK, read_rxflr(dev));
@@ -456,7 +460,7 @@ static void handle_fifos(const struct device *dev)
 
 	if (packet->dir == MSPI_TX) {
 		if (dev_data->buf_pos < dev_data->buf_end) {
-			tx_data(dev, packet);
+			tx_data(dev);
 		} else {
 			/* It may happen that at this point the controller is
 			 * still shifting out the last frame (the last interrupt
@@ -489,7 +493,7 @@ static void handle_fifos(const struct device *dev)
 			 * has no chance to get new entries, hence no further
 			 * interrupts are generated and the transfer gets stuck.
 			 */
-			if (read_rx_fifo(dev, packet)) {
+			if (read_rx_fifo(dev)) {
 				finished = true;
 				break;
 			}
@@ -552,9 +556,9 @@ static void fifo_work_handler(struct k_work *work)
 
 static void mspi_dw_isr(const struct device *dev)
 {
-#if defined(CONFIG_MSPI_DMA)
-	struct mspi_dw_data *dev_data = dev->data;
+	struct mspi_dw_data __maybe_unused *dev_data = dev->data;
 
+#if defined(CONFIG_MSPI_DMA)
 	if (dev_data->xfer.xfer_mode == MSPI_DMA) {
 		if (vendor_specific_read_dma_irq(dev)) {
 			set_imr(dev, 0);
@@ -566,7 +570,6 @@ static void mspi_dw_isr(const struct device *dev)
 #endif
 
 #if defined(CONFIG_MSPI_DW_HANDLE_FIFOS_IN_SYSTEM_WORKQUEUE)
-	struct mspi_dw_data *dev_data = dev->data;
 	int rc;
 
 	dev_data->imr = read_imr(dev);
@@ -662,6 +665,8 @@ static bool apply_io_mode(struct mspi_dw_data *dev_data,
 
 static bool apply_cmd_length(struct mspi_dw_data *dev_data, uint32_t cmd_length)
 {
+	dev_data->spi_ctrlr0 &= ~SPI_CTRLR0_INST_L_MASK;
+
 	switch (cmd_length) {
 	case 0:
 		dev_data->spi_ctrlr0 |= FIELD_PREP(SPI_CTRLR0_INST_L_MASK,
@@ -691,6 +696,7 @@ static bool apply_addr_length(struct mspi_dw_data *dev_data,
 		return false;
 	}
 
+	dev_data->spi_ctrlr0 &= ~SPI_CTRLR0_ADDR_L_MASK;
 	dev_data->spi_ctrlr0 |= FIELD_PREP(SPI_CTRLR0_ADDR_L_MASK,
 					   addr_length * 2);
 
@@ -1088,32 +1094,31 @@ static int start_next_packet(const struct device *dev)
 	struct mspi_dw_data *dev_data = dev->data;
 	const struct mspi_xfer_packet *packet =
 		&dev_data->xfer.packets[dev_data->packets_done];
+	bool data_only_packet = dev_data->xfer.cmd_length == 0 &&
+				dev_data->xfer.addr_length == 0;
 	bool xip_enabled = COND_CODE_1(CONFIG_MSPI_XIP,
 				       (dev_data->xip_enabled != 0),
 				       (false));
 	unsigned int key;
-	uint32_t packet_frames;
+	uint32_t data_frames;
 	uint32_t imr = 0;
 	int rc = 0;
 
-	if (packet->num_bytes == 0 &&
-	    dev_data->xfer.cmd_length == 0 &&
-	    dev_data->xfer.addr_length == 0) {
+
+	if (data_only_packet && packet->num_bytes == 0) {
 		return 0;
 	}
 
 	dev_data->dummy_bytes = 0;
 	dev_data->bytes_to_discard = 0;
 
-	dev_data->ctrlr0 &= ~(CTRLR0_TMOD_MASK)
-			  & ~(CTRLR0_DFS_MASK)
-			  & ~(CTRLR0_DFS32_MASK);
+	dev_data->ctrlr0 &= ~CTRLR0_TMOD_MASK
+			 &  ~CTRLR0_DFS_MASK
+			 &  ~CTRLR0_DFS32_MASK;
 
 	dev_data->spi_ctrlr0 &= ~SPI_CTRLR0_WAIT_CYCLES_MASK;
 
-	if (dev_data->standard_spi &&
-	    (dev_data->xfer.cmd_length != 0 ||
-	     dev_data->xfer.addr_length != 0)) {
+	if (dev_data->standard_spi && !data_only_packet) {
 		dev_data->bytes_per_frame_exp = 0;
 		dev_data->ctrlr0 |= FIELD_PREP(CTRLR0_DFS_MASK, 7);
 		dev_data->ctrlr0 |= FIELD_PREP(CTRLR0_DFS32_MASK, 7);
@@ -1133,9 +1138,26 @@ static int start_next_packet(const struct device *dev)
 		}
 	}
 
-	packet_frames = packet->num_bytes >> dev_data->bytes_per_frame_exp;
+	data_frames = packet->num_bytes >> dev_data->bytes_per_frame_exp;
 
-	if (packet_frames > UINT16_MAX + 1) {
+	if (data_only_packet) {
+		uint32_t addr_length = dev_data->xfer.addr_length;
+
+		/* For TX transfers, the command and address cannot be both
+		 * empty, so treat the first data frame as the address.
+		 */
+		if (packet->dir == MSPI_TX) {
+			addr_length = 1UL << dev_data->bytes_per_frame_exp;
+
+			--data_frames;
+		}
+
+		if (!apply_addr_length(dev_data, addr_length)) {
+			return -EINVAL;
+		}
+	}
+
+	if (data_frames > UINT16_MAX + 1) {
 		LOG_ERR("Packet length (%u) exceeds supported maximum",
 			packet->num_bytes);
 		return -EINVAL;
@@ -1179,9 +1201,7 @@ static int start_next_packet(const struct device *dev)
 		 * clock cycles for the RX part are provided (the controller
 		 * does not do it automatically in the TX/RX mode).
 		 */
-		if (dev_data->standard_spi &&
-		    (dev_data->xfer.cmd_length != 0 ||
-		     dev_data->xfer.addr_length != 0)) {
+		if (dev_data->standard_spi && !data_only_packet) {
 			uint32_t rx_total_bytes;
 			uint32_t dummy_cycles = dev_data->xfer.rx_dummy;
 
@@ -1202,7 +1222,7 @@ static int start_next_packet(const struct device *dev)
 		} else {
 			imr = IMR_RXFIM_BIT;
 			tmod = CTRLR0_TMOD_RX;
-			rx_fifo_threshold = MIN(packet_frames - 1,
+			rx_fifo_threshold = MIN(data_frames - 1,
 						dev_config->rx_fifo_threshold);
 
 			dev_data->spi_ctrlr0 |=
@@ -1234,8 +1254,8 @@ static int start_next_packet(const struct device *dev)
 	 * to prevent potential XIP transfers during that period.
 	 */
 	write_ctrlr0(dev, dev_data->ctrlr0);
-	write_ctrlr1(dev, packet_frames > 0
-		? FIELD_PREP(CTRLR1_NDF_MASK, packet_frames - 1)
+	write_ctrlr1(dev, data_frames > 0
+		? FIELD_PREP(CTRLR1_NDF_MASK, data_frames - 1)
 		: 0);
 	write_spi_ctrlr0(dev, dev_data->spi_ctrlr0);
 	write_baudr(dev, dev_data->baudr);
@@ -1260,15 +1280,15 @@ static int start_next_packet(const struct device *dev)
 #if defined(CONFIG_MSPI_DMA)
 	if (dev_data->xfer.xfer_mode == MSPI_DMA) {
 		/* For DMA mode, set start level based on transfer length to prevent underflow */
-		uint32_t total_transfer_bytes = packet->num_bytes + dev_data->xfer.addr_length +
-						dev_data->xfer.cmd_length;
-		uint32_t transfer_frames = total_transfer_bytes >> dev_data->bytes_per_frame_exp;
+		uint32_t transfer_frames = (packet->num_bytes >> dev_data->bytes_per_frame_exp) +
+					   CEIL_DIV_32(dev_data->xfer.addr_length)
+					 + CEIL_DIV_32(dev_data->xfer.cmd_length);
 
-		/* Use minimum of transfer length or FIFO depth, but at least 1 */
+		/* Above dma_start_level, the transfer will start.
+		 * Use minimum of transfer length and FIFO depth.
+		 */
 		uint8_t dma_start_level = MIN(transfer_frames - 1,
 					      dev_config->tx_fifo_depth_minus_1);
-
-		dma_start_level = (dma_start_level > 0 ? dma_start_level : 1);
 
 		/* Only TXFTHR needs to be set to the minimum number of frames */
 		write_txftlr(dev, FIELD_PREP(TXFTLR_TXFTHR_MASK, dma_start_level));
@@ -1365,8 +1385,17 @@ static int start_next_packet(const struct device *dev)
 		/* Prefill TX FIFO with any data we can */
 		if (dev_data->dummy_bytes && tx_dummy_bytes(dev, NULL)) {
 			imr = IMR_RXFIM_BIT;
-		} else if (packet->dir == MSPI_TX && packet->num_bytes) {
-			tx_data(dev, packet);
+		} else if (packet->dir == MSPI_TX) {
+			if (data_frames) {
+				tx_data(dev);
+			}
+		} else { /* packet->dir == MSPI_RX */
+			if (data_only_packet) {
+				/* For an RX data-only packet, a dummy DR write
+				 * is needed to start the transfer.
+				 */
+				write_dr(dev, 0);
+			}
 		}
 
 		/* Enable interrupts now and wait until the packet is done unless async. */
@@ -1375,16 +1404,24 @@ static int start_next_packet(const struct device *dev)
 	}
 #endif
 
+#if defined(CONFIG_MULTITHREADING)
+	k_timeout_t timeout = K_MSEC(dev_data->xfer.timeout);
+
+	/* For async transfer, start timeout timer BEFORE starting transfer to
+	 * avoid race. On fast buses the ISR can fire and call k_timer_stop()
+	 * before k_timer_start() if SER is written first.
+	 */
+	if (dev_data->xfer.async) {
+		k_timer_start(&dev_data->async_timer, timeout, K_NO_WAIT);
+	}
+#endif
+
 	/* Write SER to start transfer */
 	write_ser(dev, BIT(dev_data->dev_id->dev_idx));
 
 #if defined(CONFIG_MULTITHREADING)
-	k_timeout_t timeout = K_MSEC(dev_data->xfer.timeout);
-
-	/* For async transfer, start the timeout timer and exit. */
+	/* For async transfer, exit after starting the timeout timer. */
 	if (dev_data->xfer.async) {
-		k_timer_start(&dev_data->async_timer, timeout, K_NO_WAIT);
-
 		return 0;
 	}
 
@@ -1463,14 +1500,6 @@ static int _api_transceive(const struct device *dev,
 	struct mspi_dw_data *dev_data = dev->data;
 	int rc;
 
-	dev_data->spi_ctrlr0 &= ~SPI_CTRLR0_INST_L_MASK
-			     &  ~SPI_CTRLR0_ADDR_L_MASK;
-
-	if (!apply_cmd_length(dev_data, req->cmd_length) ||
-	    !apply_addr_length(dev_data, req->addr_length)) {
-		return -EINVAL;
-	}
-
 	if (dev_data->standard_spi) {
 		if (req->tx_dummy) {
 			LOG_ERR("TX dummy cycles unsupported in single line mode");
@@ -1485,6 +1514,24 @@ static int _api_transceive(const struct device *dev,
 		LOG_ERR("Unsupported RX (%u) or TX (%u) dummy cycles",
 			req->rx_dummy, req->tx_dummy);
 		return -EINVAL;
+	}
+
+	/* In PIO mode, the SPI_CTRLR0 register is intended for enhanced SPI modes only,
+	 * however some implementations continue to process the INST_L and ADDR_L
+	 * fields in standard mode. On those platforms the controller sends its own
+	 * instruction/address phase in addition to what the driver sends. This results
+	 * in a malformed SPI transaction with extra bytes on the wire. Mask these
+	 * fields to ensure this does not happen.
+	 */
+	if (!(IS_ENABLED(CONFIG_MSPI_DMA) && req->xfer_mode == MSPI_DMA) &&
+	    dev_data->standard_spi) {
+		dev_data->spi_ctrlr0 &= ~SPI_CTRLR0_INST_L_MASK
+				     &  ~SPI_CTRLR0_ADDR_L_MASK;
+	} else {
+		if (!apply_cmd_length(dev_data, req->cmd_length) ||
+		    !apply_addr_length(dev_data, req->addr_length)) {
+			return -EINVAL;
+		}
 	}
 
 	dev_data->xfer = *req;
@@ -1625,6 +1672,10 @@ static int _api_xip_config(const struct device *dev,
 			return rc;
 		}
 
+#if SUPPORTS_XIP_SER
+		write_xip_ser(dev, 0);
+#endif
+
 		dev_data->xip_enabled &= ~BIT(dev_id->dev_idx);
 
 		if (!dev_data->xip_enabled) {
@@ -1686,9 +1737,21 @@ static int _api_xip_config(const struct device *dev,
 		write_xip_incr_inst(dev, params->read_cmd);
 		write_xip_wrap_inst(dev, params->read_cmd);
 		write_xip_ctrl(dev, ctrl.read);
-		write_xip_write_incr_inst(dev, params->write_cmd);
-		write_xip_write_wrap_inst(dev, params->write_cmd);
-		write_xip_write_ctrl(dev, ctrl.write);
+
+		if (cfg->permission == MSPI_XIP_READ_WRITE) {
+#if MEMMAP_WRITE_SUPPORT_INSTANCES != 0
+			write_xip_write_incr_inst(dev, params->write_cmd);
+			write_xip_write_wrap_inst(dev, params->write_cmd);
+			write_xip_write_ctrl(dev, ctrl.write);
+#else
+			LOG_ERR("XIP write access not supported by this controller");
+			rc = pm_device_runtime_put(dev);
+			if (rc < 0) {
+				LOG_ERR("pm_device_runtime_put() failed: %d", rc);
+			}
+			return -ENOTSUP;
+#endif
+		}
 	} else if (dev_data->xip_params_active.read_cmd !=
 		   dev_data->xip_params_stored.read_cmd ||
 		   dev_data->xip_params_active.write_cmd !=
@@ -1709,6 +1772,10 @@ static int _api_xip_config(const struct device *dev,
 	if (rc < 0) {
 		return rc;
 	}
+
+#if SUPPORTS_XIP_SER
+	write_xip_ser(dev, BIT(dev_id->dev_idx));
+#endif
 
 	write_ssienr(dev, SSIENR_SSIC_EN_BIT);
 

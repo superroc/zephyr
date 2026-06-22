@@ -33,6 +33,9 @@
 
 #include "entropy_stm32.h"
 
+#include <zephyr/logging/log.h>
+LOG_MODULE_REGISTER(entropy_stm32, CONFIG_ENTROPY_LOG_LEVEL);
+
 #if defined(RNG_CR_CONDRST)
 #define STM32_CONDRST_SUPPORT
 #endif
@@ -140,12 +143,36 @@ static int entropy_stm32_suspend(void)
 	LL_RNG_SetAesReset(rng, 1);
 #endif /* CONFIG_SOC_STM32WB09XX */
 
-#ifdef CONFIG_SOC_SERIES_STM32WBAX
-	uint32_t wait_cycles, rng_rate;
+/*
+ * The PKA IP is currently not supported by Zephyr but may be used by
+ * external code, such as wireless stack for example. Since the RNG
+ * clock must be enabled when PKA is used on certain series, check if
+ * the PKA is in use and keep RNG clock active if so.
+ *
+ * A notable exception is the STM32WB0 series where PKA can operate
+ * autonomously and, on certain SoCs, lacks PKA_CR.EN and corresponding
+ * LL_PKA_IsEnabled(). Since RNG clock is not required by PKA, we can
+ * ignore the check on this series.
+ */
+#if defined(PKA) && !defined(CONFIG_SOC_SERIES_STM32WB0X)
+#if defined(CONFIG_STM32_HAL2)
+	uint32_t pka_clock_enabled = HAL_RCC_PKA_IsEnabledClock();
+#else /* CONFIG_STM32_HAL2 */
+	uint32_t pka_clock_enabled = __HAL_RCC_PKA_IS_CLK_ENABLED();
+#endif /* CONFIG_STM32_HAL2 */
 
-	if (LL_PKA_IsEnabled(PKA)) {
+	if (pka_clock_enabled && LL_PKA_IsEnabled(PKA)) {
+#if defined(CONFIG_SOC_SERIES_STM32WBX) || defined(CONFIG_STM32H7_DUAL_CORE)
+		z_stm32_hsem_unlock(CFG_HW_RNG_SEMID);
+#endif /* CONFIG_SOC_SERIES_STM32WBX || CONFIG_STM32H7_DUAL_CORE */
+
+		/* PKA needs RNG clock, so exit here if in use */
 		return 0;
 	}
+#endif /* PKA && !CONFIG_SOC_SERIES_STM32WB0X */
+
+#ifdef CONFIG_SOC_SERIES_STM32WBAX
+	uint32_t wait_cycles, rng_rate;
 
 	if (clock_control_get_rate(dev_data->clock,
 			(clock_control_subsys_t) &dev_cfg->pclken[0],
@@ -200,14 +227,16 @@ static void configure_rng(void)
 #ifdef STM32_CONDRST_SUPPORT
 	uint32_t desired_nist_cfg = DT_INST_PROP_OR(0, nist_config, 0U);
 	uint32_t desired_htcr = DT_INST_PROP_OR(0, health_test_config, 0U);
+	uint32_t desired_nscr = DT_INST_PROP_OR(0, noise_source_control, 0U);
 	uint32_t cur_nist_cfg = 0U;
 	uint32_t cur_htcr = 0U;
+	uint32_t cur_nscr = 0U;
 
 #if DT_INST_NODE_HAS_PROP(0, nist_config)
 	/*
 	 * Configure the RNG_CR in compliance with the NIST SP800.
 	 * The nist-config is directly copied from the DTS.
-	 * The RNG clock must be 48MHz else the clock DIV is not adpated.
+	 * The RNG clock must be 48MHz else the clock DIV is not adapted.
 	 * The RNG_CR_CONDRST is set to 1 at the same time the RNG_CR is written
 	 */
 	cur_nist_cfg = stm32_reg_read_bits(&rng->CR,
@@ -224,27 +253,32 @@ static void configure_rng(void)
 	cur_htcr = LL_RNG_GetHealthConfig(rng);
 #endif /* health_test_config */
 
-	if (cur_nist_cfg != desired_nist_cfg || cur_htcr != desired_htcr) {
+#if DT_INST_NODE_HAS_PROP(0, noise_source_control)
+	cur_nscr = LL_RNG_GetNoiseConfig(rng);
+#endif /* noise_source_control */
+
+	if (cur_nist_cfg != desired_nist_cfg || cur_htcr != desired_htcr ||
+	    cur_nscr != desired_nscr) {
 		stm32_reg_modify_bits(&rng->CR, cur_nist_cfg, desired_nist_cfg | RNG_CR_CONDRST);
 
 #if DT_INST_NODE_HAS_PROP(0, health_test_config)
 #if DT_INST_NODE_HAS_PROP(0, health_test_magic)
+		/* On certain series, a magic value must be written first as
+		 * health configuration before the actual configuration value.
+		 */
 		LL_RNG_SetHealthConfig(rng, DT_INST_PROP(0, health_test_magic));
 #endif /* health_test_magic */
 		LL_RNG_SetHealthConfig(rng, desired_htcr);
 #endif /* health_test_config */
 
-#if defined(CONFIG_SOC_SERIES_STM32L4X)
-		LL_RNG_ResetConditioningResetBit(rng);
-		/* Wait for conditioning reset process to be completed */
-		while (LL_RNG_IsResetConditioningBitSet(rng) == 1) {
-		}
-#else
+#if DT_INST_NODE_HAS_PROP(0, noise_source_control)
+		LL_RNG_SetNoiseConfig(rng, DT_INST_PROP(0, noise_source_control));
+#endif /* noise_source_control */
+
 		LL_RNG_DisableCondReset(rng);
 		/* Wait for conditioning reset process to be completed */
 		while (LL_RNG_IsEnabledCondReset(rng) == 1) {
 		}
-#endif /* CONFIG_SOC_SERIES_STM32L4X */
 	}
 #endif /* STM32_CONDRST_SUPPORT */
 
@@ -254,10 +288,14 @@ static void configure_rng(void)
 
 static void acquire_rng(void)
 {
-	entropy_stm32_resume();
 #if defined(CONFIG_SOC_SERIES_STM32WBX) || defined(CONFIG_STM32H7_DUAL_CORE)
 	/* Lock the RNG to prevent concurrent access */
 	z_stm32_hsem_lock(CFG_HW_RNG_SEMID, HSEM_LOCK_WAIT_FOREVER);
+#endif /* CONFIG_SOC_SERIES_STM32WBX || CONFIG_STM32H7_DUAL_CORE */
+
+	entropy_stm32_resume();
+
+#if defined(CONFIG_SOC_SERIES_STM32WBX) || defined(CONFIG_STM32H7_DUAL_CORE)
 	/* RNG configuration could have been changed by the other core */
 	configure_rng();
 #endif /* CONFIG_SOC_SERIES_STM32WBX || CONFIG_STM32H7_DUAL_CORE */
@@ -294,23 +332,14 @@ static int recover_seed_error(RNG_TypeDef *rng)
 {
 	uint32_t count_timeout = 0;
 
-#if defined(CONFIG_SOC_SERIES_STM32L4X)
-		LL_RNG_SetConditioningResetBit(rng);
-		LL_RNG_ResetConditioningResetBit(rng);
-#else
-		LL_RNG_EnableCondReset(rng);
-		LL_RNG_DisableCondReset(rng);
-#endif /* CONFIG_SOC_SERIES_STM32L4X */
+	LL_RNG_EnableCondReset(rng);
+	LL_RNG_DisableCondReset(rng);
 
 	/* When reset process is done cond reset bit is read 0
 	 * This typically takes: 2 AHB clock cycles + 2 RNG clock cycles.
 	 */
 
-#if defined(CONFIG_SOC_SERIES_STM32L4X)
-	while (LL_RNG_IsResetConditioningBitSet(rng) ||
-#else
 	while (LL_RNG_IsEnabledCondReset(rng) ||
-#endif /* CONFIG_SOC_SERIES_STM32L4X */
 		ll_rng_is_active_seis(rng) ||
 		ll_rng_is_active_secs(rng)) {
 		count_timeout++;
@@ -336,6 +365,27 @@ static int recover_seed_error(RNG_TypeDef *rng)
 		(void)ll_rng_read_rand_data(rng);
 	}
 #endif /* !CONFIG_SOC_SERIES_STM32WB0X */
+
+#if defined(CONFIG_SOC_STM32WB09XX)
+	if (ll_rng_is_active_seis(rng) != 0) {
+		/* RM0505 §14.7.11 "Health Test Control Register (TRNG_HEALTH_CR)":
+		 * When some oscillators are powered down, the cutoff values
+		 * must be increased as health tests could trigger an error.
+		 * The values 100 and 850 are arbitrarily higher than the default ones.
+		 * It is recommended to disable TRNG before changing these values.
+		 */
+		LL_RNG_Disable(rng);
+		ll_rng_clear_seis(rng);
+		LL_RNG_SetAesReset(rng, 1);
+		if (LL_RNG_IsActiveFlag_OSCS_REPET_ERROR(rng)) {
+			LL_RNG_SetRepetCutoff(rng, 100);
+		}
+		if (LL_RNG_IsActiveFlag_OSCS_ADAPT_ERROR(rng)) {
+			LL_RNG_SetAdapCutoff(rng, 850);
+		}
+		LL_RNG_Enable(rng);
+	}
+#endif /* CONFIG_SOC_STM32WB09XX */
 
 	if (ll_rng_is_active_seis(rng) != 0) {
 		return -EIO;
@@ -429,6 +479,8 @@ static uint16_t generate_from_isr(uint8_t *buf, uint16_t len)
 	do {
 		while (ll_rng_is_active_drdy(
 				entropy_stm32_rng_data.rng) != 1) {
+
+#if !defined(CONFIG_PM_S2RAM)
 #if !IRQLESS_TRNG
 			/*
 			 * Enter low-power mode while waiting for event
@@ -446,6 +498,7 @@ static uint16_t generate_from_isr(uint8_t *buf, uint16_t len)
 			__SEV();
 			__WFE();
 #endif /* !IRQLESS_TRNG */
+#endif /* !CONFIG_PM_S2RAM */
 		}
 
 		ret = random_sample_get(&rnd_sample);
@@ -777,7 +830,9 @@ static int entropy_stm32_rng_get_entropy_isr(const struct device *dev,
 		if (z_stm32_hsem_is_owned(CFG_HW_RNG_SEMID)) {
 			rng_already_acquired = true;
 		}
-		acquire_rng();
+		if (!rng_already_acquired) {
+			acquire_rng();
+		}
 
 		cnt = generate_from_isr(buf, len);
 
@@ -815,26 +870,30 @@ static int entropy_stm32_rng_init(const struct device *dev)
 
 	dev_data->clock = DEVICE_DT_GET(STM32_CLOCK_CONTROL_NODE);
 
-	if (!device_is_ready(dev_data->clock)) {
-		return -ENODEV;
-	}
-
 	res = clock_control_on(dev_data->clock,
 		(clock_control_subsys_t)&dev_cfg->pclken[0]);
-	__ASSERT_NO_MSG(res == 0);
+	if (res != 0) {
+		LOG_ERR("Failed to enable RNG bus clock (err %d). "
+			"Check clock configuration in DTS.", res);
+		return res;
+	}
 
 	/* Configure domain clock if any */
 	if (DT_INST_NUM_CLOCKS(0) > 1) {
 		res = clock_control_configure(dev_data->clock,
 					      (clock_control_subsys_t)&dev_cfg->pclken[1],
 					      NULL);
-		__ASSERT(res == 0, "Could not select RNG domain clock");
+		if (res != 0) {
+			LOG_ERR("Failed to configure RNG kernel clock (err %d). "
+				"Verify domain clock (e.g. HSI48) is enabled in DTS.", res);
+			return res;
+		}
 	}
 
 	/* Locking semaphore initialized to 1 (unlocked) */
 	k_sem_init(&dev_data->sem_lock, 1, 1);
 
-	/* Synching semaphore */
+	/* Syncing semaphore */
 	k_sem_init(&dev_data->sem_sync, 0, 1);
 
 	k_work_init(&dev_data->filling_work, pool_filling_work_handler);
@@ -860,6 +919,22 @@ static int entropy_stm32_rng_init(const struct device *dev)
 	 */
 	configure_rng();
 #endif /* !CONFIG_SOC_SERIES_STM32WBX && !CONFIG_STM32H7_DUAL_CORE */
+
+	if (DT_INST_NUM_CLOCKS(0) > 1) {
+		uint32_t rng_clock_rate;
+
+		if (clock_control_get_rate(dev_data->clock,
+					   (clock_control_subsys_t)&dev_cfg->pclken[1],
+					   &rng_clock_rate) != 0) {
+			LOG_ERR("Failed to get RNG domain clock rate");
+			return -EIO;
+		}
+
+		if (rng_clock_rate == 0) {
+			LOG_ERR("RNG domain clock is not running (null rate)");
+			return -ENOTSUP;
+		}
+	}
 
 	start_pool_filling(true);
 
@@ -935,5 +1010,5 @@ DEVICE_DT_INST_DEFINE(0,
 		    entropy_stm32_rng_init,
 		    PM_DEVICE_DT_INST_GET(0),
 		    &entropy_stm32_rng_data, &entropy_stm32_rng_config,
-		    PRE_KERNEL_1, CONFIG_ENTROPY_INIT_PRIORITY,
+		    STM32_TRNG_INIT_LEVEL, CONFIG_ENTROPY_INIT_PRIORITY,
 		    &entropy_stm32_rng_api);

@@ -1,14 +1,22 @@
 /*
  * Copyright (c) 2021-2023 IoT.bzh
+ * Copyright (c) 2025 Renesas Electronics Corporation
  *
  * SPDX-License-Identifier: Apache-2.0
+ */
+
+/**
+ * @file
+ * @brief Utility macro definitions to encode GPIO pin function for
+ * Renesas R-Car Gen4 SoC.
  */
 
 #ifndef ZEPHYR_INCLUDE_DT_BINDINGS_PINCTRL_RENESAS_PINCTRL_RCAR_COMMON_H_
 #define ZEPHYR_INCLUDE_DT_BINDINGS_PINCTRL_RENESAS_PINCTRL_RCAR_COMMON_H_
 
+/** @cond INTERNAL_HIDDEN */
 /**
- * @brief Utility macro to build IPSR property entry.
+ * @brief Utility macro to build IPSR property entry (Gen3/4 only).
  * IPSR: Peripheral Function Select Register
  * Each IPSR bank can hold 8 cellules of 4 bits coded function.
  *
@@ -81,6 +89,10 @@
 #define IP1SR7(shift, func) IPnSR(1, 7, shift, func)
 #define IP2SR7(shift, func) IPnSR(2, 7, shift, func)
 #define IP3SR7(shift, func) IPnSR(3, 7, shift, func)
+#define IP0SR8(shift, func) IPnSR(0, 8, shift, func)
+#define IP1SR8(shift, func) IPnSR(1, 8, shift, func)
+#define IP2SR8(shift, func) IPnSR(2, 8, shift, func)
+#define IP3SR8(shift, func) IPnSR(3, 8, shift, func)
 
 /**
  * @brief Macro to define a dummy IPSR flag for a pin
@@ -94,8 +106,25 @@
  */
 #define IPSR_DUMMY IPnSR(0x1f, 7, 0x1f, 0xf)
 
+/**
+ * @brief Utility macro to build ALTSEL property entry (Gen5 only).
+ * ALTSELn (n = 0 to 3): Alternative Peripheral Function Select Registers.
+ * Each function is coded on 4 bits hold by ALTSELn registers (1 bit per ALTSELn register).
+ *
+ * @param group The GPIO group (from 0 to 10).
+ * @param pin   The pin (i.e. bit from 0 to 31).
+ * @param func  The alternate function, encoded on 4 bits.
+ *
+ * Function code [ 0 : 3 ]
+ * Empty         [ 4 : 9 ]
+ * GPIO group    [ 10 : 13 ]
+ * Pin           [ 14 : 18 ]
+ */
+#define RCAR_ALTSEL_FUNC(group, pin, func) (((pin) << 14U) | ((group) << 10U) | (func))
+
 #define PIN_VOLTAGE_NONE 0
 #define PIN_VOLTAGE_1P8V 1
 #define PIN_VOLTAGE_3P3V 2
 
+/** @endcond */
 #endif /* ZEPHYR_INCLUDE_DT_BINDINGS_PINCTRL_RENESAS_PINCTRL_RCAR_COMMON_H_ */

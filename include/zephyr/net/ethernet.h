@@ -21,15 +21,12 @@
 #include <zephyr/net/net_ip.h>
 #include <zephyr/net/net_pkt.h>
 #include <zephyr/net/lldp.h>
+#include <zephyr/sys/clock.h>
 #include <zephyr/sys/util.h>
 #include <zephyr/net/net_if.h>
 #include <zephyr/net/ethernet_vlan.h>
 #include <zephyr/net/ptp_time.h>
 #include <zephyr/random/random.h>
-
-#if defined(CONFIG_NET_DSA_DEPRECATED)
-#include <zephyr/net/dsa.h>
-#endif
 
 #if defined(CONFIG_NVMEM)
 #include <zephyr/nvmem.h>
@@ -211,7 +208,6 @@ enum ethernet_hw_caps {
 
 /** @cond INTERNAL_HIDDEN */
 
-#if !defined(CONFIG_NET_DSA_DEPRECATED)
 enum dsa_port_type {
 	NON_DSA_PORT,
 	DSA_CONDUIT_PORT,
@@ -219,7 +215,6 @@ enum dsa_port_type {
 	DSA_CPU_PORT,
 	DSA_PORT,
 };
-#endif
 
 enum ethernet_config_type {
 	ETHERNET_CONFIG_TYPE_MAC_ADDRESS,
@@ -231,7 +226,6 @@ enum ethernet_config_type {
 	ETHERNET_CONFIG_TYPE_PRIORITY_QUEUES_NUM,
 	ETHERNET_CONFIG_TYPE_FILTER,
 	ETHERNET_CONFIG_TYPE_PORTS_NUM,
-	ETHERNET_CONFIG_TYPE_T1S_PARAM,
 	ETHERNET_CONFIG_TYPE_TXINJECTION_MODE,
 	ETHERNET_CONFIG_TYPE_RX_CHECKSUM_SUPPORT,
 	ETHERNET_CONFIG_TYPE_TX_CHECKSUM_SUPPORT,
@@ -246,56 +240,7 @@ enum ethernet_qav_param_type {
 	ETHERNET_QAV_PARAM_TYPE_STATUS,
 };
 
-enum ethernet_t1s_param_type {
-	ETHERNET_T1S_PARAM_TYPE_PLCA_CONFIG,
-};
-
 /** @endcond */
-
-/** Ethernet T1S specific parameters */
-struct ethernet_t1s_param {
-	/** Type of T1S parameter */
-	enum ethernet_t1s_param_type type;
-	union {
-		/**
-		 * PLCA is the Physical Layer (PHY) Collision
-		 * Avoidance technique employed with multidrop
-		 * 10Base-T1S standard.
-		 *
-		 * The PLCA parameters are described in standard [1]
-		 * as registers in memory map 4 (MMS = 4) (point 9.6).
-		 *
-		 * IDVER	(PLCA ID Version)
-		 * CTRL0	(PLCA Control 0)
-		 * CTRL1	(PLCA Control 1)
-		 * STATUS	(PLCA Status)
-		 * TOTMR	(PLCA TO Control)
-		 * BURST	(PLCA Burst Control)
-		 *
-		 * Those registers are implemented by each OA TC6
-		 * compliant vendor (like for e.g. LAN865x - e.g. [2]).
-		 *
-		 * Documents:
-		 * [1] - "OPEN Alliance 10BASE-T1x MAC-PHY Serial
-		 *       Interface" (ver. 1.1)
-		 * [2] - "DS60001734C" - LAN865x data sheet
-		 */
-		struct {
-			/** T1S PLCA enabled */
-			bool enable;
-			/** T1S PLCA node id range: 0 to 254 */
-			uint8_t node_id;
-			/** T1S PLCA node count range: 1 to 255 */
-			uint8_t node_count;
-			/** T1S PLCA burst count range: 0x0 to 0xFF */
-			uint8_t burst_count;
-			/** T1S PLCA burst timer */
-			uint8_t burst_timer;
-			/** T1S PLCA TO value */
-			uint8_t to_timer;
-		} plca;
-	};
-};
 
 /** Ethernet Qav specific parameters */
 struct ethernet_qav_param {
@@ -314,7 +259,7 @@ struct ethernet_qav_param {
 		unsigned int oper_idle_slope;
 		/** Traffic class the queue is bound to */
 		unsigned int traffic_class;
-	};
+	} /**< Value for the selected Qav parameter type */;
 };
 
 /** @cond INTERNAL_HIDDEN */
@@ -383,7 +328,7 @@ struct ethernet_qbv_param {
 			/** Extension time (nanoseconds) */
 			uint32_t extension_time;
 		};
-	};
+	} /**< Value for the selected Qbv parameter type */;
 };
 
 /** @cond INTERNAL_HIDDEN */
@@ -434,7 +379,7 @@ struct ethernet_qbu_param {
 		 * fragment size is (additional_fragment_size + 1) * 64 octets
 		 */
 		uint8_t additional_fragment_size : 2;
-	};
+	} /**< Value for the selected Qbu parameter type */;
 };
 
 /** @cond INTERNAL_HIDDEN */
@@ -510,7 +455,6 @@ struct ethernet_config {
 
 		struct net_eth_addr mac_address;
 
-		struct ethernet_t1s_param t1s_param;
 		struct ethernet_qav_param qav_param;
 		struct ethernet_qbv_param qbv_param;
 		struct ethernet_qbu_param qbu_param;
@@ -524,7 +468,7 @@ struct ethernet_config {
 		struct ethernet_filter filter;
 
 		uint16_t extra_tx_pkt_headroom;
-	};
+	} /**< Value for the selected Ethernet configuration type */;
 };
 
 /** @endcond */
@@ -552,7 +496,7 @@ struct ethernet_api {
 	 * for that driver.
 	 */
 #if defined(CONFIG_NET_STATISTICS_ETHERNET)
-	struct net_stats_eth *(*get_stats)(const struct device *dev);
+	struct net_stats_eth *(*get_stats)(const struct device *dev, struct net_if *iface);
 
 	/** Optional function to collect ethernet specific statistics with
 	 * type filter. If NULL, get_stats() will be called instead, which
@@ -560,25 +504,28 @@ struct ethernet_api {
 	 * @param type Bitmask of ethernet_stats_type values.
 	 */
 	struct net_stats_eth *(*get_stats_type)(const struct device *dev,
+						 struct net_if *iface,
 						 uint32_t type);
 #endif
 
 	/** Start the device */
-	int (*start)(const struct device *dev);
+	int (*start)(const struct device *dev, struct net_if *iface);
 
 	/** Stop the device */
-	int (*stop)(const struct device *dev);
+	int (*stop)(const struct device *dev, struct net_if *iface);
 
 	/** Get the device capabilities */
-	enum ethernet_hw_caps (*get_capabilities)(const struct device *dev);
+	enum ethernet_hw_caps (*get_capabilities)(const struct device *dev, struct net_if *iface);
 
 	/** Set specific hardware configuration */
 	int (*set_config)(const struct device *dev,
+			  struct net_if *iface,
 			  enum ethernet_config_type type,
 			  const struct ethernet_config *config);
 
 	/** Get hardware specific configuration */
 	int (*get_config)(const struct device *dev,
+			  struct net_if *iface,
 			  enum ethernet_config_type type,
 			  struct ethernet_config *config);
 
@@ -594,11 +541,11 @@ struct ethernet_api {
 
 	/** Return ptp_clock device that is tied to this ethernet device */
 #if defined(CONFIG_PTP_CLOCK)
-	const struct device *(*get_ptp_clock)(const struct device *dev);
+	const struct device *(*get_ptp_clock)(const struct device *dev, struct net_if *iface);
 #endif /* CONFIG_PTP_CLOCK */
 
 	/** Return PHY device that is tied to this ethernet device */
-	const struct device *(*get_phy)(const struct device *dev);
+	const struct device *(*get_phy)(const struct device *dev, struct net_if *iface);
 
 	/** Send a network packet */
 	int (*send)(const struct device *dev, struct net_pkt *pkt);
@@ -647,14 +594,8 @@ struct ethernet_lldp {
 	/** Length of the optional Data Unit TLVs */
 	size_t optional_len;
 
-	/** Network interface that has LLDP supported. */
-	struct net_if *iface;
-
-	/** LLDP TX timer start time */
-	int64_t tx_timer_start;
-
-	/** LLDP TX timeout */
-	uint32_t tx_timer_timeout;
+	/** LLDP TX timer timeout */
+	k_timepoint_t tx_timer_timeout;
 
 	/** LLDP RX callback function */
 	net_lldp_recv_cb_t cb;
@@ -689,14 +630,8 @@ struct ethernet_context {
 	struct net_if *iface;
 
 #if defined(CONFIG_NET_LLDP)
-#if NET_VLAN_MAX_COUNT > 0
-#define NET_LLDP_MAX_COUNT NET_VLAN_MAX_COUNT
-#else
-#define NET_LLDP_MAX_COUNT 1
-#endif /* NET_VLAN_MAX_COUNT > 0 */
-
 	/** LLDP specific parameters */
-	struct ethernet_lldp lldp[NET_LLDP_MAX_COUNT];
+	struct ethernet_lldp lldp;
 #endif
 
 	/**
@@ -704,31 +639,16 @@ struct ethernet_context {
 	 */
 	enum net_l2_flags ethernet_l2_flags;
 
-#if defined(CONFIG_NET_L2_PTP)
-	/** The PTP port number for this network device. We need to store the
+#if defined(CONFIG_NET_GPTP)
+	/** The gPTP port number for this network device. We need to store the
 	 * port number here so that we do not need to fetch it for every
-	 * incoming PTP packet.
+	 * incoming gPTP packet.
 	 */
-	int port;
+	uint16_t gptp_port;
 #endif
 
-#if defined(CONFIG_NET_DSA_DEPRECATED)
-	/** DSA RX callback function - for custom processing - like e.g.
-	 * redirecting packets when MAC address is caught
-	 */
-	dsa_net_recv_cb_t dsa_recv_cb;
-
-	/** Switch physical port number */
-	uint8_t dsa_port_idx;
-
-	/** DSA context pointer */
-	struct dsa_context *dsa_ctx;
-
-	/** Send a network packet via DSA master port */
-	dsa_send_t dsa_send;
-
-#elif defined(CONFIG_NET_DSA)
-	/** DSA port tpye */
+#if defined(CONFIG_NET_DSA)
+	/** DSA port type */
 	enum dsa_port_type dsa_port;
 
 	/** DSA switch context pointer */
@@ -841,34 +761,19 @@ static inline bool net_eth_is_addr_unspecified(struct net_eth_addr *addr)
  */
 static inline bool net_eth_is_addr_multicast(struct net_eth_addr *addr)
 {
-#if defined(CONFIG_NET_IPV6)
-	if (addr->addr[0] == 0x33 &&
-	    addr->addr[1] == 0x33) {
-		return true;
-	}
-#endif
-
-#if defined(CONFIG_NET_IPV4)
-	if (addr->addr[0] == 0x01 &&
-	    addr->addr[1] == 0x00 &&
-	    addr->addr[2] == 0x5e) {
-		return true;
-	}
-#endif
-
-	return false;
+	return addr->addr[0] & 0x01;
 }
 
 /**
- * @brief Check if the Ethernet MAC address is a group address.
+ * @brief Check if the Ethernet MAC address is an unicast address.
  *
  * @param addr A valid pointer to a Ethernet MAC address.
  *
- * @return true if address is a group address, false if not
+ * @return true if address is an unicast address, false if not
  */
-static inline bool net_eth_is_addr_group(struct net_eth_addr *addr)
+static inline bool net_eth_is_addr_unicast(struct net_eth_addr *addr)
 {
-	return addr->addr[0] & 0x01;
+	return !net_eth_is_addr_unspecified(addr) && !net_eth_is_addr_multicast(addr);
 }
 
 /**
@@ -880,7 +785,7 @@ static inline bool net_eth_is_addr_group(struct net_eth_addr *addr)
  */
 static inline bool net_eth_is_addr_valid(struct net_eth_addr *addr)
 {
-	return !net_eth_is_addr_unspecified(addr) && !net_eth_is_addr_group(addr);
+	return !net_eth_is_addr_unspecified(addr) && !net_eth_is_addr_multicast(addr);
 }
 
 /**
@@ -892,7 +797,6 @@ static inline bool net_eth_is_addr_valid(struct net_eth_addr *addr)
  */
 static inline bool net_eth_is_addr_lldp_multicast(struct net_eth_addr *addr)
 {
-#if defined(CONFIG_NET_GPTP) || defined(CONFIG_NET_LLDP)
 	if (addr->addr[0] == 0x01 &&
 	    addr->addr[1] == 0x80 &&
 	    addr->addr[2] == 0xc2 &&
@@ -901,9 +805,6 @@ static inline bool net_eth_is_addr_lldp_multicast(struct net_eth_addr *addr)
 	    addr->addr[5] == 0x0e) {
 		return true;
 	}
-#else
-	ARG_UNUSED(addr);
-#endif
 
 	return false;
 }
@@ -917,7 +818,6 @@ static inline bool net_eth_is_addr_lldp_multicast(struct net_eth_addr *addr)
  */
 static inline bool net_eth_is_addr_ptp_multicast(struct net_eth_addr *addr)
 {
-#if defined(CONFIG_NET_GPTP)
 	if (addr->addr[0] == 0x01 &&
 	    addr->addr[1] == 0x1b &&
 	    addr->addr[2] == 0x19 &&
@@ -926,9 +826,6 @@ static inline bool net_eth_is_addr_ptp_multicast(struct net_eth_addr *addr)
 	    addr->addr[5] == 0x00) {
 		return true;
 	}
-#else
-	ARG_UNUSED(addr);
-#endif
 
 	return false;
 }
@@ -971,20 +868,20 @@ enum ethernet_hw_caps net_eth_get_hw_capabilities(struct net_if *iface)
 	const struct device *dev = net_if_get_device(iface);
 	const struct ethernet_api *api = (struct ethernet_api *)dev->api;
 	enum ethernet_hw_caps caps = (enum ethernet_hw_caps)0;
-#if defined(CONFIG_NET_DSA) && !defined(CONFIG_NET_DSA_DEPRECATED)
+#if defined(CONFIG_NET_DSA)
 	struct ethernet_context *eth_ctx = net_if_l2_data(iface);
 
 	if (eth_ctx->dsa_port == DSA_CONDUIT_PORT) {
-		caps |= ETHERNET_DSA_CONDUIT_PORT;
+		caps = ETHERNET_DSA_CONDUIT_PORT;
 	} else if (eth_ctx->dsa_port == DSA_USER_PORT) {
-		caps |= ETHERNET_DSA_USER_PORT;
+		caps = ETHERNET_DSA_USER_PORT;
 	}
 #endif
 	if (api == NULL || api->get_capabilities == NULL) {
 		return caps;
 	}
 
-	return (enum ethernet_hw_caps)(caps | api->get_capabilities(dev));
+	return (enum ethernet_hw_caps)(caps | api->get_capabilities(dev, iface));
 }
 
 /**
@@ -1000,14 +897,14 @@ static inline
 int net_eth_get_hw_config(struct net_if *iface, enum ethernet_config_type type,
 			 struct ethernet_config *config)
 {
-	const struct ethernet_api *eth =
-		(struct ethernet_api *)net_if_get_device(iface)->api;
+	const struct device *dev = net_if_get_device(iface);
+	const struct ethernet_api *eth = (struct ethernet_api *)dev->api;
 
 	if (!eth->get_config) {
 		return -ENOTSUP;
 	}
 
-	return eth->get_config(net_if_get_device(iface), type, config);
+	return eth->get_config(dev, iface, type, config);
 }
 
 
@@ -1460,12 +1357,24 @@ static inline int net_eth_mac_load(const struct net_eth_mac_config *cfg, uint8_t
 	NET_ETH_MAC_DT_CONFIG_INIT(DT_DRV_INST(inst))
 
 /**
+ * @brief Inform ethernet L2 driver that ethernet carrier is detected or was lost.
+ * This happens when cable is connected or disconnected.
+ *
+ * @param iface Network interface
+ * @param carrier_up true if carrier is detected, false if carrier was lost
+ */
+void net_eth_carrier_set(struct net_if *iface, bool carrier_up);
+
+/**
  * @brief Inform ethernet L2 driver that ethernet carrier is detected.
  * This happens when cable is connected.
  *
  * @param iface Network interface
  */
-void net_eth_carrier_on(struct net_if *iface);
+static inline void net_eth_carrier_on(struct net_if *iface)
+{
+	net_eth_carrier_set(iface, true);
+}
 
 /**
  * @brief Inform ethernet L2 driver that ethernet carrier was lost.
@@ -1473,7 +1382,10 @@ void net_eth_carrier_on(struct net_if *iface);
  *
  * @param iface Network interface
  */
-void net_eth_carrier_off(struct net_if *iface);
+static inline void net_eth_carrier_off(struct net_if *iface)
+{
+	net_eth_carrier_set(iface, false);
+}
 
 /**
  * @brief Set promiscuous mode either ON or OFF.
@@ -1550,40 +1462,6 @@ static inline const struct device *net_eth_get_ptp_clock(struct net_if *iface)
 __syscall const struct device *net_eth_get_ptp_clock_by_index(int index);
 
 /**
- * @brief Return PTP port number attached to this interface.
- *
- * @param iface Network interface
- *
- * @return Port number, no such port if < 0
- */
-#if defined(CONFIG_NET_L2_PTP)
-int net_eth_get_ptp_port(struct net_if *iface);
-#else
-static inline int net_eth_get_ptp_port(struct net_if *iface)
-{
-	ARG_UNUSED(iface);
-
-	return -ENODEV;
-}
-#endif /* CONFIG_NET_L2_PTP */
-
-/**
- * @brief Set PTP port number attached to this interface.
- *
- * @param iface Network interface
- * @param port Port number to set
- */
-#if defined(CONFIG_NET_L2_PTP)
-void net_eth_set_ptp_port(struct net_if *iface, int port);
-#else
-static inline void net_eth_set_ptp_port(struct net_if *iface, int port)
-{
-	ARG_UNUSED(iface);
-	ARG_UNUSED(port);
-}
-#endif /* CONFIG_NET_L2_PTP */
-
-/**
  * @brief Check if the Ethernet L2 network interface can perform Wi-Fi.
  *
  * @param iface Pointer to network interface
@@ -1596,6 +1474,32 @@ static inline bool net_eth_type_is_wifi(struct net_if *iface)
 		net_if_l2_data(iface);
 
 	return ctx->eth_if_type == L2_ETH_IF_TYPE_WIFI;
+}
+
+/**
+ * @brief Check if the Ethernet L2 network interface is cabled ethernet.
+ *
+ * @param iface Pointer to network interface
+ *
+ * @return True if interface is cabled ethernet, False otherwise.
+ */
+static inline bool net_eth_type_is_ethernet(struct net_if *iface)
+{
+	const struct ethernet_context *ctx = (struct ethernet_context *)net_if_l2_data(iface);
+
+	return ctx->eth_if_type == L2_ETH_IF_TYPE_ETHERNET;
+}
+
+/**
+ * @brief Set the Ethernet interface type to Wi-Fi.
+ *
+ * @param iface Network interface
+ */
+static inline void net_eth_set_if_type_wifi(struct net_if *iface)
+{
+	struct ethernet_context *ctx = (struct ethernet_context *)net_if_l2_data(iface);
+
+	ctx->eth_if_type = L2_ETH_IF_TYPE_WIFI;
 }
 
 /**

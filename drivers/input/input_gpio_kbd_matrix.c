@@ -197,7 +197,7 @@ static int gpio_kbd_matrix_init(const struct device *dev)
 		const struct gpio_dt_spec *gpio = &cfg->col_gpio[i];
 
 		if (!gpio_is_ready_dt(gpio)) {
-			LOG_ERR("%s is not ready", gpio->port->name);
+			LOG_ERR_DEVICE_NOT_READY(gpio->port);
 			return -ENODEV;
 		}
 
@@ -217,7 +217,7 @@ static int gpio_kbd_matrix_init(const struct device *dev)
 		struct gpio_callback *gpio_cb;
 
 		if (!gpio_is_ready_dt(gpio)) {
-			LOG_ERR("%s is not ready", gpio->port->name);
+			LOG_ERR_DEVICE_NOT_READY(gpio->port);
 			return -ENODEV;
 		}
 
@@ -277,8 +277,6 @@ static const struct input_kbd_matrix_api gpio_kbd_matrix_api = {
 };
 
 #define INPUT_GPIO_KBD_MATRIX_INIT(n)								\
-	BUILD_ASSERT(DT_INST_PROP_LEN(n, col_gpios) <= 32, "invalid col-size");			\
-												\
 	INPUT_KBD_MATRIX_DT_INST_DEFINE_ROW_COL(						\
 		n, DT_INST_PROP_LEN(n, row_gpios), DT_INST_PROP_LEN(n, col_gpios));		\
 												\

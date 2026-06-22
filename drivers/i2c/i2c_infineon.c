@@ -9,17 +9,16 @@
  * @brief I2C driver for Infineon CAT1 MCU family.
  */
 
-#define DT_DRV_COMPAT infineon_cat1_i2c
+#define DT_DRV_COMPAT infineon_i2c
 
 #include <zephyr/drivers/i2c.h>
 #include <zephyr/drivers/pinctrl.h>
 #include <cyhal_i2c.h>
 #include <cyhal_utils_impl.h>
-#include <cyhal_utils_impl.h>
 #include <cyhal_scb_common.h>
 
 #include <zephyr/logging/log.h>
-LOG_MODULE_REGISTER(i2c_infineon_cat1, CONFIG_I2C_LOG_LEVEL);
+LOG_MODULE_REGISTER(i2c_infineon, CONFIG_I2C_LOG_LEVEL);
 
 #define I2C_CAT1_EVENTS_MASK  (CYHAL_I2C_MASTER_WR_CMPLT_EVENT | CYHAL_I2C_MASTER_RD_CMPLT_EVENT | \
 			       CYHAL_I2C_MASTER_ERR_EVENT)
@@ -260,10 +259,6 @@ static int ifx_cat1_i2c_transfer(const struct device *dev, struct i2c_msg *msg, 
 	struct ifx_cat1_i2c_data *data = dev->data;
 	cy_rslt_t rslt = CY_RSLT_SUCCESS;
 	int ret;
-
-	if (!num_msgs) {
-		return 0;
-	}
 
 	/* Acquire semaphore (block I2C transfer for another thread) */
 	ret = k_sem_take(&data->operation_sem, K_FOREVER);

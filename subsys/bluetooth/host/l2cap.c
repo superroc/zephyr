@@ -23,7 +23,6 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/__assert.h>
 #include <zephyr/sys/atomic.h>
-#include <zephyr/sys/check.h>
 #include <zephyr/sys/iterable_sections.h>
 #include <zephyr/sys/byteorder.h>
 #include <zephyr/sys/math_extras.h>
@@ -68,7 +67,7 @@ LOG_MODULE_REGISTER(bt_l2cap, CONFIG_BT_L2CAP_LOG_LEVEL);
 #define L2CAP_LE_PSM_IS_DYN(_psm) \
 	(_psm >= L2CAP_LE_PSM_DYN_START && _psm <= L2CAP_LE_PSM_DYN_END)
 
-#define L2CAP_CONN_TIMEOUT	K_SECONDS(40)
+#define L2CAP_CONN_TIMEOUT	K_SECONDS(CONFIG_BT_L2CAP_CONN_RTX_TIMEOUT)
 #define L2CAP_DISC_TIMEOUT	K_SECONDS(2)
 /** @brief Local L2CAP RTX (Response Timeout eXpired)
  *
@@ -1272,6 +1271,8 @@ static void l2cap_chan_rx_init(struct bt_l2cap_le_chan *chan)
 {
 	LOG_DBG("chan %p", chan);
 
+	chan->rx.cid = 0U;
+
 	/* Redirect to experimental API. */
 	IF_ENABLED(CONFIG_BT_L2CAP_SEG_RECV, ({
 		if (chan->chan.ops->seg_recv) {
@@ -1378,8 +1379,7 @@ static void l2cap_chan_destroy(struct bt_l2cap_chan *chan)
 
 	/* Destroy segmented SDU if it exists */
 	if (le_chan->_sdu) {
-		net_buf_unref(le_chan->_sdu);
-		le_chan->_sdu = NULL;
+		net_buf_drop(&le_chan->_sdu);
 		le_chan->_sdu_len = 0U;
 	}
 }
@@ -1447,19 +1447,20 @@ static uint16_t l2cap_chan_accept(struct bt_conn *conn,
 
 	le_chan->required_sec_level = server->sec_level;
 
-	if (!l2cap_chan_add(conn, *chan, l2cap_chan_destroy)) {
-		return BT_L2CAP_LE_ERR_NO_RESOURCES;
-	}
-
 	/* Init TX parameters */
 	l2cap_chan_tx_init(le_chan);
 	le_chan->tx.cid = scid;
 	le_chan->tx.mps = mps;
 	le_chan->tx.mtu = mtu;
-	l2cap_chan_tx_give_credits(le_chan, credits);
 
 	/* Init RX parameters */
 	l2cap_chan_rx_init(le_chan);
+
+	if (!l2cap_chan_add(conn, *chan, l2cap_chan_destroy)) {
+		return BT_L2CAP_LE_ERR_NO_RESOURCES;
+	}
+
+	l2cap_chan_tx_give_credits(le_chan, credits);
 
 	/* Set channel PSM */
 	le_chan->psm = server->psm;
@@ -1757,7 +1758,13 @@ static void le_ecred_reconf_req(struct bt_l2cap *l2cap, uint8_t ident,
 
 	while (buf->len >= sizeof(scid)) {
 		struct bt_l2cap_chan *chan;
+
 		scid = net_buf_pull_le16(buf);
+		if (!L2CAP_LE_CID_IS_DYN(scid)) {
+			result = BT_L2CAP_RECONF_INVALID_CID;
+			goto response;
+		}
+
 		chan = bt_l2cap_le_lookup_tx_cid(conn, scid);
 		if (!chan) {
 			result = BT_L2CAP_RECONF_INVALID_CID;
@@ -2390,8 +2397,7 @@ static void l2cap_chan_shutdown(struct bt_l2cap_chan *chan)
 
 	/* Destroy segmented SDU if it exists */
 	if (le_chan->_sdu) {
-		net_buf_unref(le_chan->_sdu);
-		le_chan->_sdu = NULL;
+		net_buf_drop(&le_chan->_sdu);
 		le_chan->_sdu_len = 0U;
 	}
 
@@ -2646,8 +2652,7 @@ static void l2cap_chan_le_recv_seg(struct bt_l2cap_le_chan *chan,
 		return;
 	}
 
-	buf = chan->_sdu;
-	chan->_sdu = NULL;
+	buf = net_buf_take(&chan->_sdu);
 	chan->_sdu_len = 0U;
 
 	l2cap_chan_le_recv_sdu(chan, buf, seg);
@@ -2754,6 +2759,14 @@ static void l2cap_chan_le_recv(struct bt_l2cap_le_chan *chan,
 			bt_l2cap_chan_disconnect(&chan->chan);
 			return;
 		}
+
+		if (chan->_sdu->user_data_size < sizeof(uint16_t)) {
+			LOG_ERR("SDU buffer user_data_size %u is too small",
+				chan->_sdu->user_data_size);
+			net_buf_drop(&chan->_sdu);
+			bt_l2cap_chan_disconnect(&chan->chan);
+			return;
+		}
 		chan->_sdu_len = sdu_len;
 
 		/* Send sdu_len/mps worth of credits */
@@ -2777,8 +2790,7 @@ static void l2cap_chan_le_recv(struct bt_l2cap_le_chan *chan,
 	owned_ref = net_buf_ref(buf);
 	err = chan->chan.ops->recv(&chan->chan, owned_ref);
 	if (err != -EINPROGRESS) {
-		net_buf_unref(owned_ref);
-		owned_ref = NULL;
+		net_buf_drop(&owned_ref);
 	}
 
 	if (err < 0) {

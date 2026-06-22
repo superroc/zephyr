@@ -47,6 +47,10 @@ if(NOT CONFIG_LLEXT_TYPE_ELF_SHAREDLIB)
     list(APPEND ext_names init_fini)
 endif()
 
+if(CONFIG_LLEXT_RODATA_NO_RELOC)
+    list(APPEND ext_names rodata_no_reloc)
+endif()
+
 # generate extension targets for each extension in 'ext_names'
 foreach(ext_name ${ext_names})
   set(ext_src ${PROJECT_SOURCE_DIR}/src/${ext_name}_ext.c)
@@ -58,6 +62,20 @@ foreach(ext_name ${ext_names})
   )
   generate_inc_file_for_target(app ${ext_bin} ${ext_inc})
 endforeach()
+
+if(CONFIG_LLEXT_VENEERS)
+  set(ext_bin ${PROJECT_BINARY_DIR}/llext/veneer.llext)
+  set(ext_inc ${ZEPHYR_BINARY_DIR}/include/generated/veneer.inc)
+  add_llext_target(veneer_ext
+    OUTPUT  ${ext_bin}
+    SOURCES ${PROJECT_SOURCE_DIR}/src/veneer_ext.c
+  )
+  # -mno-long-calls overrides the global -mlong-calls so direct BL instructions
+  # are emitted, producing R_ARM_THM_CALL relocations that exercise the veneer.
+  get_target_property(veneer_lib veneer_ext lib_target)
+  target_compile_options(${veneer_lib} PRIVATE -mno-long-calls)
+  generate_inc_file_for_target(app ${ext_bin} ${ext_inc})
+endif()
 
 if(NOT CONFIG_LLEXT_TYPE_ELF_OBJECT)
   add_llext_target(multi_file_ext

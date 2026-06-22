@@ -123,7 +123,8 @@ static uint16_t virtnet_enum_queues_cb(uint16_t q_index, uint16_t q_size_max, vo
 	}
 }
 
-static enum ethernet_hw_caps virtnet_get_capabilities(const struct device *dev)
+static enum ethernet_hw_caps virtnet_get_capabilities(const struct device *dev __unused,
+						     struct net_if *iface __unused)
 {
 	return ETHERNET_LINK_10BASE | ETHERNET_LINK_100BASE | ETHERNET_LINK_1000BASE |
 	       ETHERNET_LINK_2500BASE | ETHERNET_LINK_5000BASE;
@@ -188,10 +189,6 @@ static void virtnet_if_init(struct net_if *iface)
 	struct virtnet_data *data = dev->data;
 	const struct virtnet_config *config = dev->config;
 
-	if (dev == NULL) {
-		LOG_ERR("could not access device structure!");
-		return;
-	}
 	data->iface = iface;
 	net_if_set_link_addr(iface, data->mac, sizeof(data->virtio_devcfg->mac), NET_LINK_ETHERNET);
 	struct virtq *vq = virtio_get_virtqueue(config->vdev, VIRTQ_RX(1));

@@ -19,7 +19,7 @@ K_THREAD_STACK_DEFINE(wait_thread_stack_area, WAIT_THREAD_STACK_SIZE);
 struct k_thread wait_thread_data;
 
 /* Define result of CRC computation */
-#define RESULT_CRC_16_THREADSAFE 0xD543
+#define RESULT_CRC_16_THREADSAFE_WAIT_THREAD_ENTRY 0xD543
 
 /**
  * 1) Take the semaphore
@@ -45,7 +45,7 @@ static void wait_thread_entry(void *a, void *b, void *c)
 
 	crc_update(dev, &ctx, data, sizeof(data));
 	crc_finish(dev, &ctx);
-	zassert_equal(crc_verify(&ctx, RESULT_CRC_16_THREADSAFE), 0);
+	zassert_equal(crc_verify(&ctx, RESULT_CRC_16_THREADSAFE_WAIT_THREAD_ENTRY), 0);
 }
 
 /* Define result of CRC computation */
@@ -56,6 +56,10 @@ static void wait_thread_entry(void *a, void *b, void *c)
  */
 ZTEST(crc, test_crc_8)
 {
+#ifndef CONFIG_CRC_DRIVER_HAS_CRC8
+	ztest_test_skip();
+#endif
+
 	static const struct device *dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_crc));
 
 	uint8_t data[8] = {0x0A, 0x2B, 0x4C, 0x6D, 0x8E, 0x49, 0x00, 0xC4};
@@ -84,6 +88,10 @@ ZTEST(crc, test_crc_8)
  */
 ZTEST(crc, test_crc_16)
 {
+#ifndef CONFIG_CRC_DRIVER_HAS_CRC16
+	ztest_test_skip();
+#endif
+
 	static const struct device *dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_crc));
 
 	uint8_t data[8] = {0x0A, 0x2B, 0x4C, 0x6D, 0x8E, 0x49, 0x00, 0xC4};
@@ -110,6 +118,10 @@ ZTEST(crc, test_crc_16)
  */
 ZTEST(crc, test_crc_16_ccitt)
 {
+#ifndef CONFIG_CRC_DRIVER_HAS_CRC16_CCITT
+	ztest_test_skip();
+#endif
+
 	static const struct device *dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_crc));
 
 	uint8_t data[8] = {0x0A, 0x2B, 0x4C, 0x6D, 0x8E, 0x49, 0x00, 0xC4};
@@ -129,6 +141,36 @@ ZTEST(crc, test_crc_16_ccitt)
 }
 
 /* Define result of CRC computation */
+#define RESULT_CRC_16_ITU_T 0x8866
+
+/**
+ * @brief Test that crc_16_itu_t works
+ */
+ZTEST(crc, test_crc_16_itu_t)
+{
+#ifndef CONFIG_CRC_DRIVER_HAS_CRC16_ITU_T
+	ztest_test_skip();
+#endif
+
+	static const struct device *dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_crc));
+
+	uint8_t data[8] = {0x0A, 0x2B, 0x4C, 0x6D, 0x8E, 0x49, 0x00, 0xC4};
+
+	struct crc_ctx ctx = {
+		.type = CRC16_ITU_T,
+		.polynomial = CRC16_CCITT_POLY,
+		.seed = CRC16_ITU_T_INIT_VAL,
+		.reversed = 0,
+	};
+
+	zassert_equal(crc_begin(dev, &ctx), 0);
+	zassert_equal(crc_update(dev, &ctx, data, sizeof(data)), 0);
+	zassert_equal(crc_finish(dev, &ctx), 0);
+
+	zassert_equal(crc_verify(&ctx, RESULT_CRC_16_ITU_T), 0);
+}
+
+/* Define result of CRC computation */
 #define RESULT_CRC_32_C 0xBB19ECB2
 
 /**
@@ -136,6 +178,10 @@ ZTEST(crc, test_crc_16_ccitt)
  */
 ZTEST(crc, test_crc_32_c)
 {
+#ifndef CONFIG_CRC_DRIVER_HAS_CRC32_C
+	ztest_test_skip();
+#endif
+
 	static const struct device *dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_crc));
 
 	uint8_t data[8] = {0x0A, 0x2B, 0x4C, 0x6D, 0x8E, 0x49, 0x00, 0xC4};
@@ -162,6 +208,10 @@ ZTEST(crc, test_crc_32_c)
  */
 ZTEST(crc, test_crc_32_ieee)
 {
+#ifndef CONFIG_CRC_DRIVER_HAS_CRC32_IEEE
+	ztest_test_skip();
+#endif
+
 	static const struct device *dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_crc));
 
 	uint8_t data[8] = {0x0A, 0x2B, 0x4C, 0x6D, 0x8E, 0x49, 0x00, 0xC4};
@@ -179,6 +229,34 @@ ZTEST(crc, test_crc_32_ieee)
 }
 
 /* Define result of CRC computation */
+#define RESULT_CRC_32_MPEG2 0x80AE8C93
+
+/**
+ * @brief Test that crc_32_mpeg2 works
+ */
+ZTEST(crc, test_crc_32_mpeg2)
+{
+#ifndef CONFIG_CRC_DRIVER_HAS_CRC32_MPEG2
+	ztest_test_skip();
+#endif
+
+	static const struct device *dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_crc));
+
+	uint8_t data[8] = {0x0A, 0x2B, 0x4C, 0x6D, 0x8E, 0x49, 0x00, 0xC4};
+	struct crc_ctx ctx = {
+		.type = CRC32_MPEG2,
+		.polynomial = CRC32_IEEE_POLY,
+		.seed = CRC32_MPEG2_INIT_VAL,
+		.reversed = 0,
+	};
+
+	zassert_equal(crc_begin(dev, &ctx), 0);
+	zassert_equal(crc_update(dev, &ctx, data, sizeof(data)), 0);
+	zassert_equal(crc_finish(dev, &ctx), 0);
+	zassert_equal(crc_verify(&ctx, RESULT_CRC_32_MPEG2), 0);
+}
+
+/* Define result of CRC computation */
 #define RESULT_CRC_8_REMAIN_3 0xBB
 
 /**
@@ -186,6 +264,10 @@ ZTEST(crc, test_crc_32_ieee)
  */
 ZTEST(crc, test_crc_8_remain_3)
 {
+#ifndef CONFIG_CRC_DRIVER_HAS_CRC8
+	ztest_test_skip();
+#endif
+
 	static const struct device *dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_crc));
 
 	uint8_t data[11] = {0x0A, 0x2B, 0x4C, 0x6D, 0x8E, 0x49, 0x00, 0xC4, 0x3D, 0x4D, 0x51};
@@ -211,6 +293,10 @@ ZTEST(crc, test_crc_8_remain_3)
  */
 ZTEST(crc, test_crc_16_remain_1)
 {
+#ifndef CONFIG_CRC_DRIVER_HAS_CRC16
+	ztest_test_skip();
+#endif
+
 	static const struct device *dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_crc));
 
 	uint8_t data[9] = {0x0A, 0x2B, 0x4C, 0x6D, 0x8E, 0x49, 0x00, 0xC4, 0x3D};
@@ -237,6 +323,10 @@ ZTEST(crc, test_crc_16_remain_1)
  */
 ZTEST(crc, test_crc_16_ccitt_remain_2)
 {
+#ifndef CONFIG_CRC_DRIVER_HAS_CRC16_CCITT
+	ztest_test_skip();
+#endif
+
 	static const struct device *dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_crc));
 
 	uint8_t data[10] = {0x0A, 0x2B, 0x4C, 0x6D, 0x8E, 0x49, 0x00, 0xC4, 0xFF, 0xA0};
@@ -255,8 +345,26 @@ ZTEST(crc, test_crc_16_ccitt_remain_2)
 	zassert_equal(crc_verify(&ctx, RESULT_CRC_CCITT_REMAIN_2), 0);
 }
 
-/* Define result of CRC computation */
-#define RESULT_DISCONTINUOUS_BUFFER 0x75
+/* Select CRC test variant macros */
+#ifdef CONFIG_CRC_DRIVER_HAS_CRC8
+#define CRC_TEST_VARIANT                    CRC8
+#define CRC_TEST_POLY                       CRC8_POLY
+#define CRC_TEST_INIT_VAL                   CRC8_INIT_VAL
+#define CRC_TEST_REVERSE_CONFIG             (CRC_FLAG_REVERSE_INPUT | CRC_FLAG_REVERSE_OUTPUT)
+#define CRC_TEST_DISCONTINUOUS_BUF_EXPECTED 0x75
+#elif defined(CONFIG_CRC_DRIVER_HAS_CRC16)
+#define CRC_TEST_VARIANT                    CRC16
+#define CRC_TEST_POLY                       CRC16_POLY
+#define CRC_TEST_INIT_VAL                   CRC16_INIT_VAL
+#define CRC_TEST_REVERSE_CONFIG             (CRC_FLAG_REVERSE_INPUT | CRC_FLAG_REVERSE_OUTPUT)
+#define CRC_TEST_DISCONTINUOUS_BUF_EXPECTED 0xBDE3
+#else
+#define CRC_TEST_VARIANT                    CRC32_C
+#define CRC_TEST_POLY                       CRC32C_POLY
+#define CRC_TEST_INIT_VAL                   CRC32_C_INIT_VAL
+#define CRC_TEST_REVERSE_CONFIG             (CRC_FLAG_REVERSE_INPUT | CRC_FLAG_REVERSE_OUTPUT)
+#define CRC_TEST_DISCONTINUOUS_BUF_EXPECTED 0x20477127
+#endif
 
 /**
  * @brief Test CRC calculation with discontinuous buffers.
@@ -269,21 +377,27 @@ ZTEST(crc, test_discontinuous_buf)
 	uint8_t data2[5] = {0x49, 0x00, 0xC4, 0x3B, 0x78};
 
 	struct crc_ctx ctx = {
-		.type = CRC8,
-		.polynomial = CRC8_POLY,
-		.seed = CRC8_INIT_VAL,
-		.reversed = CRC_FLAG_REVERSE_INPUT | CRC_FLAG_REVERSE_OUTPUT,
+		.type = CRC_TEST_VARIANT,
+		.polynomial = CRC_TEST_POLY,
+		.seed = CRC_TEST_INIT_VAL,
+		.reversed = CRC_TEST_REVERSE_CONFIG,
 	};
 
 	zassert_equal(crc_begin(dev, &ctx), 0);
 	zassert_equal(crc_update(dev, &ctx, data1, sizeof(data1)), 0);
 	zassert_equal(crc_update(dev, &ctx, data2, sizeof(data2)), 0);
 	zassert_equal(crc_finish(dev, &ctx), 0);
-	zassert_equal(crc_verify(&ctx, RESULT_DISCONTINUOUS_BUFFER), 0);
+	zassert_equal(crc_verify(&ctx, CRC_TEST_DISCONTINUOUS_BUF_EXPECTED), 0);
 }
 
 /* Define result of CRC computation */
-#define RESULT_CRC_8_REMAIN_3_THREADSAFE 0xBB
+#ifdef CONFIG_CRC_DRIVER_HAS_CRC8
+#define CRC_TEST_THREADSAFE_EXPECTED 0xBB
+#elif defined(CONFIG_CRC_DRIVER_HAS_CRC16)
+#define CRC_TEST_THREADSAFE_EXPECTED 0x24CA
+#else
+#define CRC_TEST_THREADSAFE_EXPECTED 0x9BCEE9AB
+#endif
 
 /**
  * @brief Test CRC function semaphore wait for thread safety
@@ -293,15 +407,16 @@ ZTEST(crc, test_discontinuous_buf)
  */
 ZTEST(crc, test_crc_threadsafe)
 {
+
 	static const struct device *dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_crc));
 
 	uint8_t data[11] = {0x0A, 0x2B, 0x4C, 0x6D, 0x8E, 0x49, 0x00, 0xC4, 0x3D, 0x4D, 0x51};
 
 	struct crc_ctx ctx = {
-		.type = CRC8,
-		.polynomial = CRC8_POLY,
-		.seed = CRC8_INIT_VAL,
-		.reversed = CRC_FLAG_REVERSE_OUTPUT | CRC_FLAG_REVERSE_INPUT,
+		.type = CRC_TEST_VARIANT,
+		.polynomial = CRC_TEST_POLY,
+		.seed = CRC_TEST_INIT_VAL,
+		.reversed = CRC_TEST_REVERSE_CONFIG,
 	};
 
 	/**
@@ -323,7 +438,7 @@ ZTEST(crc, test_crc_threadsafe)
 	crc_begin(dev, &ctx);
 	crc_update(dev, &ctx, data, sizeof(data));
 	crc_finish(dev, &ctx);
-	zassert_equal(crc_verify(&ctx, RESULT_CRC_8_REMAIN_3_THREADSAFE), 0);
+	zassert_equal(crc_verify(&ctx, CRC_TEST_THREADSAFE_EXPECTED), 0);
 }
 
 ZTEST_SUITE(crc, NULL, NULL, NULL, NULL, NULL);

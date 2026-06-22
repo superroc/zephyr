@@ -49,11 +49,11 @@ extern "C" {
  * The Change_Counter operand value does not match the Change_Counter field value of the Volume
  * Offset State characteristic.
  */
-#define BT_VOCS_ERR_INVALID_COUNTER                0x80
+#define BT_VOCS_ERR_INVALID_COUNTER                0x80U
 /** An invalid opcode has been used in a control point procedure. */
-#define BT_VOCS_ERR_OP_NOT_SUPPORTED               0x81
+#define BT_VOCS_ERR_OP_NOT_SUPPORTED               0x81U
 /** An operand value used in a control point procedure is outside the permissible range. */
-#define BT_VOCS_ERR_OUT_OF_RANGE                   0x82
+#define BT_VOCS_ERR_OUT_OF_RANGE                   0x82U
 /** @} */
 
 /**
@@ -66,7 +66,10 @@ extern "C" {
 #define BT_VOCS_MAX_OFFSET                         255
 /** @} */
 
-/** @brief Opaque Volume Offset Control Service instance. */
+/**
+ * @struct bt_vocs
+ * @brief Opaque Volume Offset Control Service instance.
+ */
 struct bt_vocs;
 
 /** @brief Structure for registering a Volume Offset Control Service instance. */

@@ -48,8 +48,32 @@ enum dns_query_type {
 	/** IPv6 query */
 	DNS_QUERY_TYPE_AAAA = 28,
 	/** Service location query */
-	DNS_QUERY_TYPE_SRV = 33
+	DNS_QUERY_TYPE_SRV = 33,
+	/** Request all record types query */
+	DNS_QUERY_TYPE_ANY = 255,
+	/** Reserved query type value */
+	DNS_QUERY_TYPE_RESERVED = 65535,
 };
+
+
+/** Private RR type range start (RFC 6895) */
+#define DNS_RR_TYPE_PRIVATE_START_VALUE 65280
+/** Private RR type range end (RFC 6895) */
+#define DNS_RR_TYPE_PRIVATE_END_VALUE 65534
+
+/**
+ * @brief Check if query type is a private RR (RFC 6895: 65280-65534)
+ *
+ * @param type Query type to check
+ * @return true if type is in private RR range, false otherwise
+ */
+static inline bool dns_query_type_is_private(enum dns_query_type type)
+{
+	unsigned int val = (unsigned int)type;
+
+	return (val >= DNS_RR_TYPE_PRIVATE_START_VALUE &&
+		val <= DNS_RR_TYPE_PRIVATE_END_VALUE);
+}
 
 /**
  * Entity that added the DNS server.
@@ -82,6 +106,13 @@ enum dns_server_source {
 #else
 #define DNS_MAX_TEXT_SIZE 64
 #endif /* CONFIG_DNS_RESOLVER_MAX_TEXT_LEN */
+
+/** Max size of private RR data. */
+#if defined(CONFIG_DNS_RESOLVER_MAX_PRIVATE_DATA_LEN)
+#define DNS_MAX_PRIVATE_DATA_SIZE CONFIG_DNS_RESOLVER_MAX_PRIVATE_DATA_LEN
+#else
+#define DNS_MAX_PRIVATE_DATA_SIZE 128
+#endif /* CONFIG_DNS_RESOLVER_MAX_PRIVATE_DATA_LEN */
 
 /** @cond INTERNAL_HIDDEN */
 
@@ -284,22 +315,42 @@ int dns_dispatcher_unregister(struct dns_socket_dispatcher *ctx);
  * Enumerate the extensions that are available in the address info
  */
 enum dns_resolve_extension {
-	DNS_RESOLVE_NONE = 0,
-	DNS_RESOLVE_TXT,
-	DNS_RESOLVE_SRV,
+	DNS_RESOLVE_NONE = 0, /**< No extension in use   */
+	DNS_RESOLVE_TXT,      /**< TXT field is returned */
+	DNS_RESOLVE_SRV,      /**< SRV field is returned */
+	DNS_RESOLVE_PRIVATE,  /**< Private RR is returned */
 };
 
+/** TXT record information */
 struct dns_resolve_txt {
+	/** Length of the text field */
 	size_t textlen;
+	/** Text field (NULL terminated)*/
 	char   text[DNS_MAX_TEXT_SIZE + 1];
 };
 
+/** SRV record information */
 struct dns_resolve_srv {
+	/** Priority of the server order, lower value means higher priority */
 	uint16_t priority;
+	/** Weight of the server for load balancing */
 	uint16_t weight;
+	/** Port number of the service */
 	uint16_t port;
+	/** Length of the target field */
 	size_t   targetlen;
+	/** Target field (NULL terminated) */
 	char     target[DNS_MAX_NAME_SIZE + 1];
+};
+
+/** Private RR record information */
+struct dns_resolve_private {
+	/** RR type value (in private use range 65280-65534) */
+	uint16_t type;
+	/** Length of the data field */
+	size_t datalen;
+	/** Raw data from the private RR */
+	uint8_t data[DNS_MAX_PRIVATE_DATA_SIZE];
 };
 
 /**
@@ -310,24 +361,32 @@ struct dns_addrinfo {
 	uint8_t ai_family;
 
 	union {
+		/** A or AAAA records */
 		struct {
 			/** Length of the ai_addr field or ai_canonname */
 			net_socklen_t ai_addrlen;
 
-			/* NET_AF_INET or NET_AF_INET6 address info */
+			/** NET_AF_INET or NET_AF_INET6 address info */
 			struct net_sockaddr ai_addr;
 
-			/** AF_LOCAL Canonical name of the address */
+			/** NET_AF_LOCAL Canonical name of the address */
 			char ai_canonname[DNS_MAX_NAME_SIZE + 1];
 		};
 
-		/* AF_UNSPEC extensions */
+		/** SRV or TXT records (NET_AF_UNSPEC extension) */
 		struct {
+			/** What kind of extension is returned */
 			enum dns_resolve_extension ai_extension;
 
 			union {
+				/** TXT record info */
 				struct dns_resolve_txt ai_txt;
+				/** SRV record info */
 				struct dns_resolve_srv ai_srv;
+#if defined(CONFIG_DNS_RESOLVER_PRIVATE_RR_SUPPORT) || defined(__DOXYGEN__)
+				/** Private RR info */
+				struct dns_resolve_private ai_private;
+#endif /* CONFIG_DNS_RESOLVER_PRIVATE_RR_SUPPORT */
 			};
 		};
 	};
@@ -516,6 +575,14 @@ struct dns_resolve_context {
 		 * cannot be used to find correct pending query.
 		 */
 		uint16_t query_hash;
+
+		/* Number of additional queries sent to resolve CNAME record
+		 * name aliases.
+		 */
+		uint8_t additional_queries;
+
+		/** Flag to indicate that the callback has been called at least once. */
+		bool cb_called;
 	} queries[DNS_NUM_CONCUR_QUERIES];
 
 	/** Is this context in use */
@@ -525,6 +592,11 @@ struct dns_resolve_context {
 	/** DNS packet forwarding callback. */
 	dns_resolve_pkt_fw_cb_t pkt_fw_cb;
 #endif /* CONFIG_DNS_RESOLVER_PACKET_FORWARDING */
+
+/** @cond INTERNAL_HIDDEN */
+	/** How many times the DNS context init been called. */
+	int init_called;
+/** @endcond */
 };
 
 /** @cond INTERNAL_HIDDEN */
@@ -768,9 +840,8 @@ int dns_resolve_name(struct dns_resolve_context *ctx,
  * Note that this is an asynchronous call, the function will return immediately
  * and the system will call the callback after resolving has finished or a timeout
  * has occurred.
- * We might send the query to multiple servers (if there are more than one
- * server configured), but we only use the result of the first received
- * response.
+ * The callback is called for each response received. The query needs to be either cancelled
+ * manually, or by the timeout.
  *
  * @param ctx DNS context
  * @param query What the caller wants to resolve.
@@ -884,6 +955,27 @@ static inline int dns_get_addr_info(const char *query,
 static inline int dns_cancel_addr_info(uint16_t dns_id)
 {
 	return dns_resolve_cancel(dns_resolve_get_default(), dns_id);
+}
+
+/**
+ * @brief Cancel a pending DNS query using id, name and type.
+ *
+ * @details This releases DNS resources used by a pending query.
+ *
+ * @param query_name Name of the resource we are trying to query (hostname)
+ * @param query_type Type of the query (A or AAAA)
+ * @param dns_id DNS id of the pending query
+ *
+ * @return 0 if ok, <0 if error.
+ */
+static inline int dns_cancel_addr_info_with_name(const char *query_name,
+					enum dns_query_type query_type,
+					uint16_t dns_id)
+{
+	return dns_resolve_cancel_with_name(dns_resolve_get_default(),
+				dns_id,
+				query_name,
+				query_type);
 }
 
 /**

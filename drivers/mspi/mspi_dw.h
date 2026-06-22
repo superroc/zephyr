@@ -20,24 +20,24 @@
 
 /* CTRLR0 - Control Register 0 */
 #define CTRLR0_SSI_IS_MST_BIT	BIT(31)
-#define CTRLR0_SPI_FRF_MASK	COND_CODE_1(SSI_VERSION_2, GENMASK(22, 21), GENMASK(23, 22))
+#define CTRLR0_SPI_FRF_MASK	COND_CODE_1(SSI_VERSION_2, (GENMASK(22, 21)), (GENMASK(23, 22)))
 #define CTRLR0_SPI_FRF_STANDARD	0UL
 #define CTRLR0_SPI_FRF_DUAL	1UL
 #define CTRLR0_SPI_FRF_QUAD	2UL
 #define CTRLR0_SPI_FRF_OCTAL	3UL
-#define CTRLR0_TMOD_MASK	COND_CODE_1(SSI_VERSION_2, GENMASK(9, 8), GENMASK(11, 10))
+#define CTRLR0_TMOD_MASK	COND_CODE_1(SSI_VERSION_2, (GENMASK(9, 8)), (GENMASK(11, 10)))
 #define CTRLR0_TMOD_TX_RX	0UL
 #define CTRLR0_TMOD_TX		1UL
 #define CTRLR0_TMOD_RX		2UL
 #define CTRLR0_TMOD_EEPROM	3UL
-#define CTRLR0_SCPOL_BIT	COND_CODE_1(SSI_VERSION_2, BIT(7), BIT(9))
-#define CTRLR0_SCPH_BIT		COND_CODE_1(SSI_VERSION_2, BIT(6), BIT(8))
-#define CTRLR0_FRF_MASK		COND_CODE_1(SSI_VERSION_2, GENMASK(5, 4), GENMASK(7, 6))
+#define CTRLR0_SCPOL_BIT	COND_CODE_1(SSI_VERSION_2, (BIT(7)), (BIT(9)))
+#define CTRLR0_SCPH_BIT		COND_CODE_1(SSI_VERSION_2, (BIT(6)), (BIT(8)))
+#define CTRLR0_FRF_MASK		COND_CODE_1(SSI_VERSION_2, (GENMASK(5, 4)), (GENMASK(7, 6)))
 #define CTRLR0_FRF_SPI		0UL
 #define CTRLR0_FRF_SSP		1UL
 #define CTRLR0_FRF_MICROWIRE	2UL
-#define CTRLR0_DFS_MASK		COND_CODE_1(SSI_VERSION_2, GENMASK(3, 0), GENMASK(4, 0))
-#define CTRLR0_DFS32_MASK	COND_CODE_1(SSI_VERSION_2, GENMASK(20, 16), (0))
+#define CTRLR0_DFS_MASK		COND_CODE_1(SSI_VERSION_2, (GENMASK(3, 0)), (GENMASK(4, 0)))
+#define CTRLR0_DFS32_MASK	COND_CODE_1(SSI_VERSION_2, (GENMASK(20, 16)), (0UL))
 
 /* CTRLR1- Control Register 1 */
 #define CTRLR1_NDF_MASK		GENMASK(15, 0)
@@ -262,3 +262,21 @@ static void reg_write(uint32_t data, const struct device *dev, uint32_t off)
 		dev_config->write(data, dev, off); \
 	}
 #endif
+
+#define USES_MEMMAP_WRITE_SUPPORT(inst) + DT_INST_PROP(inst, memmap_write_support)
+#define MEMMAP_WRITE_SUPPORT_INSTANCES \
+	(0 DT_INST_FOREACH_STATUS_OKAY(USES_MEMMAP_WRITE_SUPPORT))
+
+#define USES_CONCURRENT_MEMMAP_SUPPORT(inst) \
+	+ DT_INST_PROP(inst, concurrent_memmap_support)
+#define CONCURRENT_MEMMAP_SUPPORT_INSTANCES \
+	(0 DT_INST_FOREACH_STATUS_OKAY(USES_CONCURRENT_MEMMAP_SUPPORT))
+
+/* XIPSER only needs to be managed on cores that support concurrent memory-mapping (so master
+ * transfers keep running while memory mapping is enabled) and without mem-map-write support,
+ * hence why this register exists for IP's with concurrent mem-map enabled. However, this
+ * driver doesn't yet support the hardware concurrent mem-map feature. Regardless, we still
+ * need to use this register.
+ */
+#define SUPPORTS_XIP_SER (CONCURRENT_MEMMAP_SUPPORT_INSTANCES != 0 && \
+	MEMMAP_WRITE_SUPPORT_INSTANCES == 0)

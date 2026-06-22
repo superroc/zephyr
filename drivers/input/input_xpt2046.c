@@ -196,7 +196,7 @@ static int xpt2046_init(const struct device *dev)
 	struct xpt2046_data *data = dev->data;
 
 	if (!spi_is_ready_dt(&config->bus)) {
-		LOG_ERR("SPI controller device not ready");
+		LOG_ERR_DEVICE_NOT_READY(config->bus.bus);
 		return -ENODEV;
 	}
 
@@ -205,7 +205,7 @@ static int xpt2046_init(const struct device *dev)
 	k_work_init_delayable(&data->dwork, xpt2046_release_handler);
 
 	if (!gpio_is_ready_dt(&config->int_gpio)) {
-		LOG_ERR("Interrupt GPIO controller device not ready");
+		LOG_ERR_DEVICE_NOT_READY(config->int_gpio.port);
 		return -ENODEV;
 	}
 
@@ -256,10 +256,5 @@ static int xpt2046_init(const struct device *dev)
 		     "min_x must be less than max_x");                                             \
 	BUILD_ASSERT(DT_INST_PROP(index, min_y) < DT_INST_PROP(index, max_y),                      \
 		     "min_y must be less than max_y");                                             \
-	BUILD_ASSERT(DT_INST_PROP(index, z_threshold) > 10, "Too small threshold");                \
-	BUILD_ASSERT(DT_INST_PROP(index, touchscreen_size_x) > 1 &&                                \
-			     DT_INST_PROP(index, touchscreen_size_y) > 1,                          \
-		     "Screen size undefined");                                                     \
-	BUILD_ASSERT(DT_INST_PROP(index, reads) > 0, "Number of reads must be at least one");
 
 DT_INST_FOREACH_STATUS_OKAY(XPT2046_INIT)

@@ -8,11 +8,12 @@ This provides parsing of domains yaml file and creation of objects of the
 Domain class.
 '''
 
+import logging
+import os
 from dataclasses import dataclass
 
-import yaml
 import pykwalify.core
-import logging
+import yaml
 
 DOMAINS_SCHEMA = '''
 ## A pykwalify schema for basic validation of the structure of a
@@ -58,13 +59,12 @@ logger.addHandler(handler)
 
 class Domains:
 
-    def __init__(self, domains_yaml):
+    def __init__(self, data: dict):
         try:
-            data = yaml.safe_load(domains_yaml)
             pykwalify.core.Core(source_data=data,
                                 schema_data=schema).validate()
-        except (yaml.YAMLError, pykwalify.errors.SchemaError):
-            logger.critical(f'malformed domains.yaml')
+        except pykwalify.errors.SchemaError as e:
+            logger.critical(f'malformed domains.yaml: {e}')
             exit(1)
 
         self._build_dir = data['build_dir']
@@ -88,16 +88,41 @@ class Domains:
             with open(domains_file, 'r') as f:
                 domains_yaml = f.read()
         except FileNotFoundError:
-            logger.critical(f'domains.yaml file not found: {domains_file}')
+            logger.critical(
+                f'domains.yaml file not found: {domains_file}'
+            )
             exit(1)
 
-        return Domains(domains_yaml)
+        domains = Domains.from_yaml(domains_yaml)
+
+        # If the stored build_dir differs from the file's actual
+        # directory, the artifacts were moved - rebase all paths
+        # to the actual location.
+        base_dir = os.path.dirname(os.path.abspath(domains_file))
+        if domains._build_dir != base_dir:
+            logger.warning(
+                f"Rebasing domain build directories from "
+                f"'{domains._build_dir}' to '{base_dir}'"
+            )
+            old_base_dir = domains._build_dir
+            domains._build_dir = base_dir
+            for domain in domains._domains.values():
+                domain.build_dir = domain.build_dir.replace(
+                    old_base_dir, base_dir, 1
+                )
+
+        return domains
 
     @staticmethod
     def from_yaml(domains_yaml):
         '''Load domains from a string with YAML contents.
         '''
-        return Domains(domains_yaml)
+        try:
+            domains_yaml = yaml.safe_load(domains_yaml)
+            return Domains(domains_yaml)
+        except yaml.YAMLError as e:
+            logger.critical(f'Invalid domains.yaml: {e}')
+            exit(1)
 
     def get_domains(self, names=None, default_flash_order=False):
         if names is None:

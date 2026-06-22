@@ -17,7 +17,7 @@ endmacro()
 
 # OpenThread options
 set(OT_BUILD_EXECUTABLES OFF CACHE BOOL "Disable OpenThread samples")
-set(OT_BUILTIN_MBEDTLS_MANAGEMENT OFF CACHE BOOL "Use Zephyr's mbedTLS heap")
+set(OT_BUILTIN_MBEDTLS_MANAGEMENT OFF CACHE BOOL "Use Zephyr's Mbed TLS heap")
 set(OT_PLATFORM "zephyr" CACHE STRING "Zephyr as a target platform")
 set(OT_PLATFORM_POWER_CALIBRATION OFF CACHE BOOL "Use Zephyr's power calibration handled by Radio Driver")
 set(OT_THREAD_VERSION ${CONFIG_OPENTHREAD_THREAD_VERSION} CACHE STRING "User selected Thread stack version")
@@ -189,7 +189,7 @@ target_compile_definitions(ot-config INTERFACE ${OT_PARAM_LIST})
 # Since Mbed TLS 3.1.0 MBEDTLS_SSL_EXPORT_KEYS was removed as build symbol and
 # it's always assumed to be enabled. Corresponding kconfig was removed from
 # Zephyr as well, but OpenThread code still uses it, so we add it here.
-target_compile_definitions(ot-config INTERFACE -DMBEDTLS_SSL_EXPORT_KEYS)
+target_compile_definitions(ot-config INTERFACE MBEDTLS_SSL_EXPORT_KEYS)
 
 # Zephyr compiler options
 target_include_directories(ot-config INTERFACE

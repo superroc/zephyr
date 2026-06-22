@@ -347,6 +347,12 @@ static int mcux_ccm_get_subsys_rate(const struct device *dev,
 		break;
 #endif
 
+#ifdef CONFIG_OTP_MCUX_OCOTP
+	case IMX_CCM_OCOTP_CLK:
+		*rate = CLOCK_GetIpgFreq();
+		break;
+#endif
+
 #ifdef CONFIG_ETH_NXP_ENET
 	case IMX_CCM_ENET_CLK:
 #ifdef CONFIG_SOC_SERIES_IMX8M
@@ -473,7 +479,11 @@ static int mcux_ccm_get_subsys_rate(const struct device *dev,
 #endif
 #if DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(flexspi))
 	case IMX_CCM_FLEXSPI_CLK:
+#ifdef CONFIG_SOC_SERIES_IMX8M
+		*rate = CLOCK_GetClockRootFreq(kCLOCK_QspiClkRoot);
+#else
 		*rate = CLOCK_GetClockRootFreq(kCLOCK_FlexspiClkRoot);
+#endif
 		break;
 #endif
 #if DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(flexspi2))

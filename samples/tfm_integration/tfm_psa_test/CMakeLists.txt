@@ -74,6 +74,17 @@ set_property(TARGET zephyr_property_target
              -DTFM_ISOLATION_LEVEL=2
 )
 
+# Let TF-M install TF-PSA-Crypto include files in the binary directory.
+#
+# In a normal TF-M build in Zephyr this is not required because those headers
+# are provided by TF-PSA-Crypto already. This sample follows a different
+# build procedure though (which is the officially suggested one from TF-M),
+# so we need those headers to be installed in the binary directory.
+set_property(TARGET zephyr_property_target
+             APPEND PROPERTY TFM_CMAKE_OPTIONS
+             -DTFM_INSTALL_TF_PSA_CRYPTO_HEADERS=ON
+)
+
 include(ExternalProject)
 
 ExternalProject_Add(tfm_psa_arch_test_app
@@ -84,6 +95,7 @@ ExternalProject_Add(tfm_psa_arch_test_app
                 -G ${CMAKE_GENERATOR}
                 -S ${TFM_TEST_REPO_PATH}/tests_psa_arch
                 -B ${PROJECT_BINARY_DIR}/tfm_ns
+                -DPython3_EXECUTABLE=${PYTHON_EXECUTABLE}
                 -DCROSS_COMPILE=${TFM_TOOLCHAIN_PATH}/${TFM_TOOLCHAIN_PREFIX}
                 -DPSA_TOOLCHAIN_FILE=${TFM_BINARY_DIR}/api_ns/cmake/${TFM_TOOLCHAIN_NS_FILE}
                 -DCONFIG_SPE_PATH=${TFM_BINARY_DIR}/api_ns

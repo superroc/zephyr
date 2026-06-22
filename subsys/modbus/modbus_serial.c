@@ -439,15 +439,14 @@ static void uart_cb_handler(const struct device *dev, void *app_data)
 		return;
 	}
 
-	if (uart_irq_update(dev) && uart_irq_is_pending(dev)) {
+	uart_irq_update(dev);
 
-		if (uart_irq_rx_ready(dev)) {
-			cb_handler_rx(ctx);
-		}
+	if (uart_irq_rx_ready(dev)) {
+		cb_handler_rx(ctx);
+	}
 
-		if (uart_irq_tx_ready(dev)) {
-			cb_handler_tx(ctx);
-		}
+	if (uart_irq_tx_ready(dev)) {
+		cb_handler_tx(ctx);
 	}
 }
 
@@ -693,8 +692,11 @@ int modbus_serial_init(struct modbus_context *ctx,
 		if (!err) {
 			k_timer_init(&cfg->rtu_timer, rtu_tmr_handler, NULL);
 			k_timer_user_data_set(&cfg->rtu_timer, ctx);
-			modbus_serial_rx_on(ctx);
 		}
+	}
+
+	if (!err && !ctx->client) {
+		modbus_serial_rx_on(ctx);
 	}
 
 	LOG_INF("RTU timeout %u us", cfg->rtu_timeout);

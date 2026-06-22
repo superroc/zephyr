@@ -1,6 +1,6 @@
 version = 1
 
-# Declare default license and copyright text for files that typically do not include them.
+# Declare default license and copyright text for files that typically do not or cannot include them.
 [[annotations]]
 path = [
     # zephyr-keep-sorted-start
@@ -9,7 +9,7 @@ path = [
     "**/*.conf",
     "**/*.ecl",
     "**/*.html",
-    "**/*.rst",
+    "**/*.json",
     "**/*.yaml",
     "**/*.yml",
     "**/*_defconfig",
@@ -22,4 +22,9 @@ path = [
     # zephyr-keep-sorted-stop
 ]
 SPDX-License-Identifier = "Apache-2.0"
+SPDX-FileCopyrightText = "Copyright The Zephyr Project Contributors"
+
+[[annotations]]
+path = "**/*.rst"
+SPDX-License-Identifier = "CC-BY-4.0"
 SPDX-FileCopyrightText = "Copyright The Zephyr Project Contributors"

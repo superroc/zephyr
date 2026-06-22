@@ -14,6 +14,7 @@
  * HAL includes go first to
  * avoid BIT macro redefinition
  */
+#include <esp_efuse.h>
 #include <esp_flash.h>
 #include <spi_flash_mmap.h>
 #include <soc/spi_struct.h>
@@ -24,12 +25,13 @@
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
+#include <zephyr/sys/util.h>
 #include <stddef.h>
 #include <string.h>
 #include <errno.h>
+#include <stdint.h>
 #include <zephyr/drivers/flash.h>
 #include <soc.h>
-
 #ifdef CONFIG_ESP_FLASH_ASYNC_IPM
 #include <zephyr/drivers/ipm.h>
 #endif
@@ -131,19 +133,13 @@ static inline void flash_esp32_sem_give(const struct device *dev)
 
 #endif /* CONFIG_MULTITHREADING && !CONFIG_ESP_FLASH_ASYNC */
 
-#include <zephyr/kernel.h>
-#include <zephyr/logging/log.h>
-#include <zephyr/sys/util.h>
-#include <stdint.h>
-#include <string.h>
-
 #ifdef CONFIG_ESP_FLASH_HOST
 #ifndef CONFIG_MCUBOOT
 static int flash_esp32_read_check_enc(off_t address, void *buffer, size_t length)
 {
 	int ret = 0;
 
-	if (esp_flash_encryption_enabled()) {
+	if (esp_efuse_is_flash_encryption_enabled()) {
 		LOG_DBG("Flash read ENCRYPTED - address 0x%lx size 0x%x", address, length);
 		ret = esp_flash_read_encrypted(NULL, address, buffer, length);
 	} else {
@@ -163,7 +159,7 @@ static int flash_esp32_write_check_enc(off_t address, const void *buffer, size_t
 {
 	int ret = 0;
 
-	if (esp_flash_encryption_enabled() && !ENCRYPTION_IS_VIRTUAL) {
+	if (esp_efuse_is_flash_encryption_enabled() && !ENCRYPTION_IS_VIRTUAL) {
 		LOG_DBG("Flash write ENCRYPTED - address 0x%lx size 0x%x", address, length);
 		ret = esp_flash_write_encrypted(NULL, address, buffer, length);
 	} else {
@@ -185,15 +181,15 @@ static int flash_esp32_write_check_enc(off_t address, const void *buffer, size_t
 static bool aligned_flash_write(size_t dest_addr, const void *src, size_t size, bool erase);
 static bool aligned_flash_erase(size_t addr, size_t size);
 
-/* Auxiliar buffer to store the sector that will be partially written */
+/* Auxiliary buffer to store the sector that will be partially written */
 static uint8_t write_aux_buf[FLASH_SECTOR_SIZE] = {0};
 
-/* Auxiliar buffer to store the sector that will be partially erased */
+/* Auxiliary buffer to store the sector that will be partially erased */
 static uint8_t erase_aux_buf[FLASH_SECTOR_SIZE] = {0};
 
 static bool aligned_flash_write(size_t dest_addr, const void *src, size_t size, bool erase)
 {
-	bool flash_encryption_enabled = esp_flash_encryption_enabled();
+	bool flash_encryption_enabled = esp_efuse_is_flash_encryption_enabled();
 
 	/* When flash encryption is enabled, write alignment is 32 bytes, however to avoid
 	 * inconsistences the region may be erased right before writing, thus the alignment
@@ -381,7 +377,7 @@ static int flash_esp32_read(const struct device *dev, off_t address, void *buffe
 	size_t remaining = length;
 	size_t copy_size = 0;
 	size_t aligned_size = 0;
-	bool allow_decrypt = esp_flash_encryption_enabled();
+	bool allow_decrypt = esp_efuse_is_flash_encryption_enabled();
 
 	if (flash_esp32_is_aligned(address, buffer, length)) {
 		ret = esp_rom_flash_read(address, buffer, length, allow_decrypt);
@@ -448,7 +444,7 @@ static int flash_esp32_write(const struct device *dev, off_t address, const void
 		return -EINVAL;
 	}
 
-	bool encrypt = esp_flash_encryption_enabled();
+	bool encrypt = esp_efuse_is_flash_encryption_enabled();
 
 	ret = esp_rom_flash_write(address, (void *)buffer, length, encrypt);
 #else
@@ -457,7 +453,7 @@ static int flash_esp32_write(const struct device *dev, off_t address, const void
 #ifdef CONFIG_ESP_FLASH_ENCRYPTION
 	bool erase = false;
 
-	if (esp_flash_encryption_enabled()) {
+	if (esp_efuse_is_flash_encryption_enabled()) {
 		/* Ensuring flash region has been erased before writing in order to
 		 * avoid inconsistences when hardware flash encryption is enabled.
 		 */
@@ -497,7 +493,7 @@ static int flash_esp32_erase(const struct device *dev, off_t start, size_t len)
 		ret = -EIO;
 	}
 
-	if (esp_flash_encryption_enabled()) {
+	if (esp_efuse_is_flash_encryption_enabled()) {
 		uint8_t erased_val_buf[FLASH_BUFFER_SIZE];
 		uint32_t bytes_remaining = len;
 		uint32_t offset = start;
@@ -510,10 +506,10 @@ static int flash_esp32_erase(const struct device *dev, off_t start, size_t len)
 		 * value (0xFF) into flash when erasing a region.
 		 *
 		 * This is handled on this implementation because MCUboot's state
-		 * machine relies on erased valued data (0xFF) readed from a
+		 * machine relies on erased valued data (0xFF) read from a
 		 * previously erased region that was not written yet, however when
 		 * hardware flash encryption is enabled, the flash read always
-		 * decrypts whats being read from flash, thus a region that was
+		 * decrypts what is being read from flash, thus a region that was
 		 * erased would not be read as what MCUboot expected (0xFF).
 		 */
 		while (bytes_remaining != 0) {
@@ -673,7 +669,7 @@ static void flash_cpu01_receive_cb(const struct device *ipm, void *user_data, ui
 				volatile void *shm)
 {
 	struct flash_esp32_dev_data *data = (struct flash_esp32_dev_data *) user_data;
-	struct flash_req *req = (struct flash_req *) shm;
+	volatile struct flash_req *req = (volatile struct flash_req *)shm;
 
 #ifdef CONFIG_ESP_FLASH_HOST
 	if (id == CMD_REQUEST) {
@@ -714,6 +710,17 @@ static const struct flash_parameters *flash_esp32_get_parameters(const struct de
 
 static int flash_esp32_init(const struct device *dev)
 {
+#ifndef CONFIG_MCUBOOT
+	/*
+	 * Switch the main flash chip to OS-aware functions now that the
+	 * scheduler is running. These were left as the no-OS (cache-suspend)
+	 * functions during early boot in esp_flash_config(), because the
+	 * OS-aware path can guard flash access with a mutex. MCUboot runs
+	 * single-threaded and keeps the no-OS functions.
+	 */
+	esp_flash_app_init();
+#endif
+
 #ifdef CONFIG_MULTITHREADING
 	struct flash_esp32_dev_data *const data = dev->data;
 

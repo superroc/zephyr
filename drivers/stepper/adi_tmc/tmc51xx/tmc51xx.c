@@ -8,7 +8,8 @@
 
 #include <stdlib.h>
 
-#include <zephyr/drivers/stepper.h>
+#include <zephyr/drivers/stepper/stepper.h>
+#include <zephyr/drivers/stepper/stepper_ctrl.h>
 #include <zephyr/drivers/stepper/stepper_trinamic.h>
 
 #include <adi_tmc_bus.h>
@@ -57,7 +58,13 @@ static int tmc51xx_bus_check_spi(const union tmc_bus *bus, uint8_t comm_type)
 	if (comm_type != TMC_COMM_SPI) {
 		return -ENOTSUP;
 	}
-	return spi_is_ready_dt(&bus->spi) ? 0 : -ENODEV;
+
+	if (!spi_is_ready_dt(&bus->spi)) {
+		LOG_ERR_DEVICE_NOT_READY(bus->spi.bus);
+		return -ENODEV;
+	}
+
+	return 0;
 }
 
 static int tmc51xx_reg_write_spi(const struct device *dev, const uint8_t reg_addr,
@@ -101,7 +108,12 @@ static int tmc51xx_bus_check_uart(const union tmc_bus *bus, uint8_t comm_type)
 	if (comm_type != TMC_COMM_UART) {
 		return -ENOTSUP;
 	}
-	return device_is_ready(bus->uart) ? 0 : -ENODEV;
+
+	if (!device_is_ready(bus->uart)) {
+		LOG_ERR_DEVICE_NOT_READY(bus->uart);
+		return -ENODEV;
+	}
+	return 0;
 }
 
 static int tmc51xx_reg_write_uart(const struct device *dev, const uint8_t reg_addr,
@@ -166,7 +178,7 @@ int tmc51xx_read_actual_position(const struct device *dev, int32_t *position)
 	if (config->comm_type == TMC_COMM_UART) {
 		bool is_moving;
 
-		err = stepper_is_moving(motion_controller, &is_moving);
+		err = stepper_ctrl_is_moving(motion_controller, &is_moving);
 		if (err != 0) {
 			return -EIO;
 		}
@@ -253,7 +265,7 @@ static void log_stallguard(const struct device *dev, const uint32_t drv_status)
 	int32_t position;
 	int err;
 
-	err = read_actual_position(dev, &position);
+	err = tmc51xx_read_actual_position(dev, &position);
 	if (err != 0) {
 		LOG_ERR("%s: Failed to read XACTUAL register", dev->name);
 		return;
@@ -324,35 +336,35 @@ static void rampstat_work_handler(struct k_work *work)
 
 	if (ramp_stat_values > 0) {
 		switch (ramp_stat_values) {
-#ifdef CONFIG_STEPPER_ADI_TMC51XX_STEPPER
+#ifdef CONFIG_STEPPER_ADI_TMC51XX_STEPPER_CTRL
 		case TMC5XXX_STOP_LEFT_EVENT:
 			LOG_DBG("RAMPSTAT %s:Left end-stop detected", dev->name);
-			tmc51xx_stepper_trigger_cb(motion_controller,
-						     STEPPER_EVENT_LEFT_END_STOP_DETECTED);
+			tmc51xx_stepper_ctrl_trigger_cb(motion_controller,
+						     STEPPER_CTRL_EVENT_LEFT_END_STOP_DETECTED);
 			break;
 
 		case TMC5XXX_STOP_RIGHT_EVENT:
 			LOG_DBG("RAMPSTAT %s:Right end-stop detected", dev->name);
-			tmc51xx_stepper_trigger_cb(motion_controller,
-						     STEPPER_EVENT_RIGHT_END_STOP_DETECTED);
+			tmc51xx_stepper_ctrl_trigger_cb(motion_controller,
+						     STEPPER_CTRL_EVENT_RIGHT_END_STOP_DETECTED);
 			break;
 
 		case TMC5XXX_POS_REACHED_EVENT:
 		case TMC5XXX_POS_REACHED:
 		case TMC5XXX_POS_REACHED_AND_EVENT:
 			LOG_DBG("RAMPSTAT %s:Position reached", dev->name);
-			tmc51xx_stepper_trigger_cb(motion_controller,
-						     STEPPER_EVENT_STEPS_COMPLETED);
+			tmc51xx_stepper_ctrl_trigger_cb(motion_controller,
+						     STEPPER_CTRL_EVENT_STEPS_COMPLETED);
 			break;
-#endif /* CONFIG_STEPPER_ADI_TMC51XX_STEPPER */
-#ifdef CONFIG_STEPPER_ADI_TMC51XX_STEPPER_DRV
+#endif /* CONFIG_STEPPER_ADI_TMC51XX_STEPPER_CTRL */
+#ifdef CONFIG_STEPPER_ADI_TMC51XX_STEPPER_DRIVER
 		case TMC5XXX_STOP_SG_EVENT:
 			LOG_DBG("RAMPSTAT %s:Stall detected", dev->name);
-			tmc51xx_stepper_stallguard_enable(dev, false);
-			tmc51xx_stepper_drv_trigger_cb(stepper_driver,
-				STEPPER_DRV_EVENT_STALL_DETECTED);
+			tmc51xx_stepper_ctrl_stallguard_enable(dev, false);
+			tmc51xx_stepper_driver_trigger_cb(stepper_driver,
+				STEPPER_EVENT_STALL_DETECTED);
 			break;
-#endif /* CONFIG_STEPPER_ADI_TMC51XX_STEPPER_DRV */
+#endif /* CONFIG_STEPPER_ADI_TMC51XX_STEPPER_DRIVER */
 		default:
 			LOG_ERR("Illegal ramp stat bit field 0x%x", ramp_stat_values);
 			break;
@@ -408,7 +420,7 @@ static int tmc51xx_init(const struct device *dev)
 	/* Initialize SW_SEL GPIO if using UART and GPIO is specified */
 	if (config->comm_type == TMC_COMM_UART && config->sw_sel_gpio.port) {
 		if (!gpio_is_ready_dt(&config->sw_sel_gpio)) {
-			LOG_ERR("SW_SEL GPIO not ready");
+			LOG_ERR_DEVICE_NOT_READY(config->sw_sel_gpio.port);
 			return -ENODEV;
 		}
 
@@ -425,7 +437,7 @@ static int tmc51xx_init(const struct device *dev)
 	if ((config->comm_type == TMC_COMM_SPI) && config->diag0_gpio.port) {
 		LOG_INF("Configuring DIAG0 GPIO interrupt pin");
 		if (!gpio_is_ready_dt(&config->diag0_gpio)) {
-			LOG_ERR("DIAG0 interrupt GPIO not ready");
+			LOG_ERR_DEVICE_NOT_READY(config->diag0_gpio.port);
 			return -ENODEV;
 		}
 
@@ -513,9 +525,6 @@ static int tmc51xx_init(const struct device *dev)
 		     "clock frequency must be non-zero positive value");                           \
 	static struct tmc51xx_data tmc51xx_data_##inst = {                                         \
 		.dev = DEVICE_DT_GET(DT_DRV_INST(inst))};                                          \
-	COND_CODE_1(DT_PROP_EXISTS(inst, stallguard_threshold_velocity),			   \
-	BUILD_ASSERT(DT_PROP(inst, stallguard_threshold_velocity),				   \
-		     "stallguard threshold velocity must be a positive value"), ());               \
 	static const struct tmc51xx_config tmc51xx_config_##inst = {COND_CODE_1			   \
 		(DT_INST_ON_BUS(inst, spi),							   \
 		(TMC51XX_CONFIG_SPI(inst)),							   \
@@ -528,9 +537,9 @@ static int tmc51xx_init(const struct device *dev)
 				    : 0)),                                                         \
 		 .clock_frequency = DT_INST_PROP(inst, clock_frequency),                           \
 		 .motion_controller = DEVICE_DT_GET_OR_NULL(DT_CHILD_BY_COMPATIBLE(                \
-			 DT_DRV_INST(inst), adi_tmc51xx_stepper)),                                 \
+			 DT_DRV_INST(inst), adi_tmc51xx_stepper_ctrl)),                           \
 		 .stepper_driver = DEVICE_DT_GET_OR_NULL(                                          \
-			 DT_CHILD_BY_COMPATIBLE(DT_DRV_INST(inst), adi_tmc51xx_stepper_drv))};     \
+			 DT_CHILD_BY_COMPATIBLE(DT_DRV_INST(inst), adi_tmc51xx_stepper_driver))};  \
 	DEVICE_DT_INST_DEFINE(inst, tmc51xx_init, NULL, &tmc51xx_data_##inst,                      \
 			      &tmc51xx_config_##inst, POST_KERNEL, CONFIG_STEPPER_INIT_PRIORITY,   \
 			      NULL);

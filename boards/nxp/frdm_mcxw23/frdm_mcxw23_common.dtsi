@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 NXP
+ * Copyright 2025-2026 NXP
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -18,6 +18,7 @@
 		zephyr,shell-uart = &flexcomm0;
 		zephyr,uart-pipe = &flexcomm0;
 		zephyr,flash-controller = &iap;
+		zephyr,crc = &crc;
 	};
 
 	aliases {
@@ -141,6 +142,9 @@
 	#size-cells = <0>;
 	pinctrl-0 = <&pinmux_flexcomm1_i2c>;
 	pinctrl-names = "default";
+	scl-gpios = <&gpio0 14 GPIO_ACTIVE_HIGH>;
+	sda-gpios = <&gpio0 13 GPIO_ACTIVE_HIGH>;
+	recover-bus-on-init;
 
 	fxls8974: fxls8974@19 {
 		compatible = "nxp,fxls8974";
@@ -176,12 +180,11 @@
 	pinctrl-names = "default";
 };
 
-/*
- * MCXW23 FRDM board uses SYSTICK timer as the kernel timer.
- * In case we need to switch to OS timer, then
- * replace &systick with &os_timer
- */
 &systick {
+	status = "okay";
+};
+
+&os_timer {
 	status = "okay";
 };
 
@@ -190,6 +193,10 @@
 };
 
 &rtc {
+	status = "okay";
+};
+
+&crc {
 	status = "okay";
 };
 
@@ -202,6 +209,10 @@
 };
 
 &dma1 {
+	status = "okay";
+};
+
+&gint0 {
 	status = "okay";
 };
 

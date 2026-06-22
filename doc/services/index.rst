@@ -6,7 +6,9 @@ OS Services
 .. toctree::
    :maxdepth: 1
 
+   authentication/index.rst
    binary_descriptors/index.rst
+   connectivity/index.rst
    console.rst
    cpu_freq/index.rst
    cpu_load/index.rst
@@ -19,6 +21,7 @@ OS Services
    input/index.rst
    instrumentation/index.rst
    ipc/index.rst
+   jwt/index.rst
    llext/index.rst
    logging/index.rst
    tracing/index.rst
@@ -38,7 +41,7 @@ OS Services
    sensing/index.rst
    task_wdt/index.rst
    tfm/index
+   uuid/index.rst
    virtualization/index.rst
    rtio/index.rst
    zbus/index.rst
-   misc.rst

@@ -5,7 +5,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#define DT_DRV_COMPAT infineon_cat1_spi
+#define DT_DRV_COMPAT infineon_spi
 
 #define LOG_LEVEL CONFIG_SPI_LOG_LEVEL
 #include <zephyr/logging/log.h>
@@ -15,7 +15,7 @@ LOG_MODULE_REGISTER(cat1_spi);
 
 #include <zephyr/drivers/pinctrl.h>
 #include <zephyr/drivers/spi.h>
-#include <zephyr/drivers/spi/rtio.h>
+#include "spi_rtio.h"
 #include <zephyr/kernel.h>
 
 #include <cyhal_scb_common.h>

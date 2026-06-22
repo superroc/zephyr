@@ -19,9 +19,9 @@
 #include <zephyr/cache.h>
 
 #define RING_SIZE 512
-#if CONFIG_SOC_INTEL_CAVS_V25
+#if CONFIG_SOC_CAVSV25
 #define SOF_GDB_WINDOW_OFFSET 1024
-#elif CONFIG_SOC_INTEL_ACE15_MTPM || CONFIG_SOC_INTEL_ACE20_LNL || CONFIG_SOC_INTEL_ACE30
+#elif CONFIG_SOC_ACE15_MTPM || CONFIG_SOC_ACE20_LNL || CONFIG_SOC_ACE30 || CONFIG_SOC_ACE40
 /*
  * MTL has 2 usable slots in debug window, which is more than 1 slot on TGL, but
  * still slot 0 is always used for logging, slot 1 is assigned to shell
@@ -60,7 +60,7 @@ static inline int ring_have_data(const volatile struct gdb_sram_ring *ring)
 static volatile struct gdb_sram_ring *rx;
 static volatile struct gdb_sram_ring *tx;
 
-#ifndef CONFIG_INTEL_ADSP_DEBUG_SLOT_MANAGER
+#ifdef CONFIG_INTEL_ADSP_DEBUG_SLOT_MANAGER
 static int gdb_get_debug_slot(void)
 {
 	struct adsp_dw_desc slot_desc = { .type = ADSP_DW_SLOT_GDB_STUB, };
@@ -83,6 +83,7 @@ static int gdb_get_debug_slot(void)
 
 	return 0;
 }
+#else
 #define RX_UNCACHED (uint8_t *) (HP_SRAM_WIN2_BASE + SOF_GDB_WINDOW_OFFSET)
 #define TX_UNCACHED (uint8_t *) (RX_UNCACHED + sizeof(struct gdb_sram_ring))
 #endif

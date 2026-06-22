@@ -7,6 +7,7 @@
  */
 
 #include <errno.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
@@ -14,6 +15,7 @@
 
 #include <zephyr/autoconf.h>
 #include <zephyr/bluetooth/addr.h>
+#include <zephyr/bluetooth/assigned_numbers.h>
 #include <zephyr/bluetooth/audio/audio.h>
 #include <zephyr/bluetooth/audio/bap.h>
 #include <zephyr/bluetooth/audio/cap.h>
@@ -36,9 +38,9 @@
 
 LOG_MODULE_REGISTER(cap_acceptor_broadcast, LOG_LEVEL_INF);
 
-#define NAME_LEN                          sizeof(CONFIG_SAMPLE_TARGET_BROADCAST_NAME) + 1
-#define PA_SYNC_INTERVAL_TO_TIMEOUT_RATIO 20 /* Set the timeout relative to interval */
-#define PA_SYNC_SKIP                      5
+#define NAME_LEN                          sizeof(CONFIG_SAMPLE_TARGET_BROADCAST_NAME) + 1U
+#define PA_SYNC_INTERVAL_TO_TIMEOUT_RATIO 20U /* Set the timeout relative to interval */
+#define PA_SYNC_SKIP                      5U
 
 enum broadcast_flag {
 	FLAG_BROADCAST_SYNC_REQUESTED,
@@ -100,7 +102,6 @@ static int check_start_scan(void)
 static void broadcast_stream_started_cb(struct bt_bap_stream *bap_stream)
 {
 	LOG_INF("Started bap_stream %p", bap_stream);
-	total_broadcast_rx_iso_packet_count = 0U;
 
 	atomic_clear_bit(flags, FLAG_BROADCAST_SYNCING);
 	atomic_set_bit(flags, FLAG_BROADCAST_SYNCED);
@@ -121,6 +122,10 @@ static void broadcast_stream_stopped_cb(struct bt_bap_stream *bap_stream, uint8_
 static void broadcast_stream_recv_cb(struct bt_bap_stream *bap_stream,
 				     const struct bt_iso_recv_info *info, struct net_buf *buf)
 {
+	ARG_UNUSED(bap_stream);
+	ARG_UNUSED(info);
+	ARG_UNUSED(buf);
+
 	/* Triggered every time we receive an HCI data packet from the controller.
 	 * A call to this does not indicate valid data
 	 * (see the `info->flags` for which flags to check),
@@ -232,6 +237,8 @@ static void check_sync_broadcast(void)
 static void base_recv_cb(struct bt_bap_broadcast_sink *sink, const struct bt_bap_base *base,
 			 size_t base_size)
 {
+	ARG_UNUSED(sink);
+
 	memcpy(broadcast_sink.received_base, base, base_size);
 
 	if (!atomic_test_and_set_bit(flags, FLAG_BASE_RECEIVED)) {
@@ -243,6 +250,8 @@ static void base_recv_cb(struct bt_bap_broadcast_sink *sink, const struct bt_bap
 
 static void syncable_cb(struct bt_bap_broadcast_sink *sink, const struct bt_iso_biginfo *biginfo)
 {
+	ARG_UNUSED(sink);
+
 	if (!biginfo->encryption) {
 		atomic_clear_bit(flags, FLAG_BROADCAST_CODE_REQUIRED);
 	} else {
@@ -256,11 +265,22 @@ static void syncable_cb(struct bt_bap_broadcast_sink *sink, const struct bt_iso_
 	}
 }
 
+static void sink_started_cb(struct bt_bap_broadcast_sink *sink)
+{
+	ARG_UNUSED(sink);
+
+	LOG_INF("Broadcast sink started");
+
+	/* Clear requested BIS sync */
+	broadcast_sink.requested_bis_sync = 0U;
+	atomic_clear_bit(flags, FLAG_BROADCAST_SYNC_REQUESTED);
+}
+
 static void sink_stopped_cb(struct bt_bap_broadcast_sink *sink, uint8_t reason)
 {
 	int err;
 
-	LOG_INF("Broadcast sink stopped with reason %u", reason);
+	LOG_INF("Broadcast sink stopped with reason 0x%02X", reason);
 
 	err = bt_bap_broadcast_sink_delete(sink);
 	if (err != 0) {
@@ -272,6 +292,8 @@ static void sink_stopped_cb(struct bt_bap_broadcast_sink *sink, uint8_t reason)
 
 static void pa_timer_handler(struct k_work *work)
 {
+	ARG_UNUSED(work);
+
 	atomic_clear_bit(flags, FLAG_PA_SYNCING);
 
 	if (broadcast_sink.pa_sync != NULL) {
@@ -425,6 +447,8 @@ static int pa_sync_term_req_cb(struct bt_conn *conn,
 {
 	int err;
 
+	ARG_UNUSED(conn);
+
 	broadcast_sink.req_recv_state = recv_state;
 
 	err = bt_le_per_adv_sync_delete(broadcast_sink.pa_sync);
@@ -444,6 +468,8 @@ static void broadcast_code_cb(struct bt_conn *conn,
 			      const struct bt_bap_scan_delegator_recv_state *recv_state,
 			      const uint8_t broadcast_code[BT_ISO_BROADCAST_CODE_SIZE])
 {
+	ARG_UNUSED(conn);
+
 	LOG_INF("Broadcast code received for %p", recv_state);
 
 	broadcast_sink.req_recv_state = recv_state;
@@ -471,6 +497,8 @@ static int bis_sync_req_cb(struct bt_conn *conn,
 {
 	const uint32_t new_bis_sync_req = get_req_bis_sync(bis_sync_req);
 
+	ARG_UNUSED(conn);
+
 	LOG_INF("BIS sync request received for %p: 0x%08x", recv_state, bis_sync_req[0]);
 
 	if (new_bis_sync_req != BT_BAP_BIS_SYNC_NO_PREF &&
@@ -481,7 +509,10 @@ static int bis_sync_req_cb(struct bt_conn *conn,
 		return -ENOMEM;
 	}
 
-	if (broadcast_sink.requested_bis_sync == new_bis_sync_req) {
+	if (atomic_test_bit(flags, FLAG_BROADCAST_SYNC_REQUESTED) &&
+	    broadcast_sink.requested_bis_sync == new_bis_sync_req) {
+		LOG_INF("New request (0x%08x) is the same as last request; ignoring",
+			new_bis_sync_req);
 		return 0; /* no op */
 	}
 
@@ -490,6 +521,8 @@ static int bis_sync_req_cb(struct bt_conn *conn,
 		 * synced, it means that the requested BIS sync has changed.
 		 */
 		int err;
+
+		LOG_INF("Already synced. Stopping current sync and attempt resyncing");
 
 		/* The stream stopped callback will be called as part of this,
 		 * and we do not need to wait for any events from the
@@ -502,13 +535,7 @@ static int bis_sync_req_cb(struct bt_conn *conn,
 			return err;
 		}
 
-		err = bt_bap_broadcast_sink_delete(broadcast_sink.bap_broadcast_sink);
-		if (err != 0) {
-			LOG_ERR("Failed to delete Broadcast Sink: %d", err);
-
-			return err;
-		}
-		broadcast_sink.bap_broadcast_sink = NULL;
+		/* Broadcast sink will be deleted and set to NULL in `sink_stopped_cb` */
 
 		atomic_clear_bit(flags, FLAG_BROADCAST_SYNCED);
 	}
@@ -517,8 +544,6 @@ static int bis_sync_req_cb(struct bt_conn *conn,
 	if (broadcast_sink.requested_bis_sync != 0U) {
 		atomic_set_bit(flags, FLAG_BROADCAST_SYNC_REQUESTED);
 		check_sync_broadcast();
-	} else {
-		atomic_clear_bit(flags, FLAG_BROADCAST_SYNC_REQUESTED);
 	}
 
 	return 0;
@@ -568,10 +593,9 @@ static void bap_pa_sync_terminated_cb(struct bt_le_per_adv_sync *sync,
 	if (sync == broadcast_sink.pa_sync) {
 		int err;
 
-		LOG_INF("PA sync %p lost with reason %u", (void *)sync, info->reason);
+		LOG_INF("PA sync %p lost with reason 0x%02X", (void *)sync, info->reason);
 
 		/* Without PA we cannot sync to any new BIG - Clear data */
-		broadcast_sink.requested_bis_sync = 0;
 		broadcast_sink.pa_sync = NULL;
 		k_work_cancel_delayable(&pa_timer);
 		atomic_clear_bit(flags, FLAG_BROADCAST_SYNCABLE);
@@ -597,7 +621,6 @@ static bool scan_check_and_sync_broadcast(struct bt_data *data, void *user_data)
 {
 	const struct bt_le_scan_recv_info *info = user_data;
 	struct bt_le_per_adv_sync_param param = {0};
-	char le_addr[BT_ADDR_LE_STR_LEN];
 	struct bt_uuid_16 adv_uuid;
 	uint32_t broadcast_id;
 	int err;
@@ -620,10 +643,8 @@ static bool scan_check_and_sync_broadcast(struct bt_data *data, void *user_data)
 
 	broadcast_id = sys_get_le24(data->data + BT_UUID_SIZE_16);
 
-	bt_addr_le_to_str(info->addr, le_addr, sizeof(le_addr));
-
 	LOG_INF("Found broadcaster with ID 0x%06X and addr %s and sid 0x%02X\n", broadcast_id,
-		le_addr, info->sid);
+		bt_addr_le_str(info->addr), info->sid);
 
 	bt_addr_le_copy(&param.addr, info->addr);
 	param.options = BT_LE_PER_ADV_SYNC_OPT_FILTER_DUPLICATE;
@@ -661,7 +682,7 @@ static bool is_substring(const char *substr, const char *str)
 		return false;
 	}
 
-	for (size_t pos = 0; pos < str_len; pos++) {
+	for (size_t pos = 0U; pos < str_len; pos++) {
 		if (pos + sub_str_len > str_len) {
 			return false;
 		}
@@ -736,6 +757,7 @@ int init_cap_acceptor_broadcast(void)
 		static struct bt_bap_broadcast_sink_cb broadcast_sink_cbs = {
 			.base_recv = base_recv_cb,
 			.syncable = syncable_cb,
+			.started = sink_started_cb,
 			.stopped = sink_stopped_cb,
 		};
 		static struct bt_bap_stream_ops broadcast_stream_ops = {

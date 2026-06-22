@@ -3,7 +3,7 @@
  * @brief Header for Bluetooth BAP.
  *
  * Copyright (c) 2020 Bose Corporation
- * Copyright (c) 2021-2025 Nordic Semiconductor ASA
+ * Copyright (c) 2021-2026 Nordic Semiconductor ASA
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -29,10 +29,13 @@
 #include <stdint.h>
 
 #include <zephyr/autoconf.h>
-#include <zephyr/bluetooth/audio/audio.h>
 #include <zephyr/bluetooth/addr.h>
+#include <zephyr/bluetooth/assigned_numbers.h>
+#include <zephyr/bluetooth/audio/ascs.h>
+#include <zephyr/bluetooth/audio/audio.h>
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/conn.h>
+#include <zephyr/bluetooth/data.h>
 #include <zephyr/bluetooth/gap.h>
 #include <zephyr/bluetooth/iso.h>
 #include <zephyr/bluetooth/uuid.h>
@@ -198,11 +201,11 @@ enum bt_bap_qos_cfg_framing {
 /** @brief QoS Preferred PHY */
 enum {
 	/** LE 1M PHY */
-	BT_BAP_QOS_CFG_1M = BIT(0),
+	BT_BAP_QOS_CFG_1M = BIT(0U),
 	/** LE 2M PHY */
-	BT_BAP_QOS_CFG_2M = BIT(1),
+	BT_BAP_QOS_CFG_2M = BIT(1U),
 	/** LE Coded PHY */
-	BT_BAP_QOS_CFG_CODED = BIT(2),
+	BT_BAP_QOS_CFG_CODED = BIT(2U),
 };
 
 /**
@@ -329,94 +332,6 @@ struct bt_bap_qos_cfg {
 	};
 };
 
-/**
- * @brief Helper to declare elements of @ref bt_bap_qos_cfg_pref
- *
- * @param _unframed_supported Unframed PDUs supported
- * @param _phy Preferred Target PHY
- * @param _rtn Preferred Retransmission number
- * @param _latency Preferred Maximum Transport Latency (msec)
- * @param _pd_min Minimum Presentation Delay (usec)
- * @param _pd_max Maximum Presentation Delay (usec)
- * @param _pref_pd_min Preferred Minimum Presentation Delay (usec)
- * @param _pref_pd_max Preferred Maximum Presentation Delay (usec)
- */
-#define BT_BAP_QOS_CFG_PREF(_unframed_supported, _phy, _rtn, _latency, _pd_min, _pd_max,           \
-			    _pref_pd_min, _pref_pd_max)                                            \
-	{                                                                                          \
-		.unframed_supported = _unframed_supported, .phy = _phy, .rtn = _rtn,               \
-		.latency = _latency, .pd_min = _pd_min, .pd_max = _pd_max,                         \
-		.pref_pd_min = _pref_pd_min, .pref_pd_max = _pref_pd_max,                          \
-	}
-
-/** @brief Audio Stream Quality of Service Preference structure. */
-struct bt_bap_qos_cfg_pref {
-	/**
-	 * @brief Unframed PDUs supported
-	 *
-	 *  Unlike the other fields, this is not a preference but whether
-	 *  the codec supports unframed ISOAL PDUs.
-	 */
-	bool unframed_supported;
-
-	/**
-	 * @brief Preferred PHY bitfield
-	 *
-	 * Bitfield consisting of one or more of @ref BT_GAP_LE_PHY_1M, @ref BT_GAP_LE_PHY_2M and
-	 * @ref BT_GAP_LE_PHY_CODED.
-	 */
-	uint8_t phy;
-
-	/**
-	 * @brief Preferred Retransmission Number
-	 *
-	 * @ref BT_AUDIO_RTN_PREF_NONE indicates no preference.
-	 */
-	uint8_t rtn;
-
-	/**
-	 * Preferred Transport Latency
-	 *
-	 * Value range @ref BT_ISO_LATENCY_MIN to @ref BT_ISO_LATENCY_MAX
-	 */
-	uint16_t latency;
-
-	/**
-	 * @brief Minimum Presentation Delay in microseconds
-	 *
-	 * Unlike the other fields, this is not a preference but a minimum requirement.
-	 *
-	 * Value range 0 to @ref BT_AUDIO_PD_MAX
-	 */
-	uint32_t pd_min;
-
-	/**
-	 * @brief Maximum Presentation Delay in microseconds
-	 *
-	 * Unlike the other fields, this is not a preference but a maximum requirement.
-	 *
-	 * Value range @ref bt_bap_qos_cfg_pref.pd_min to @ref BT_AUDIO_PD_MAX
-	 */
-	uint32_t pd_max;
-
-	/**
-	 * @brief Preferred minimum Presentation Delay in microseconds
-	 *
-	 * Value range @ref bt_bap_qos_cfg_pref.pd_min to @ref bt_bap_qos_cfg_pref.pd_max, or
-	 * @ref BT_AUDIO_PD_PREF_NONE to indicate no preference.
-	 */
-	uint32_t pref_pd_min;
-
-	/**
-	 * @brief Preferred maximum Presentation Delay in microseconds
-	 *
-	 * Value range @ref bt_bap_qos_cfg_pref.pd_min to @ref bt_bap_qos_cfg_pref.pd_max,
-	 * and higher than or equal to @ref bt_bap_qos_cfg_pref.pref_pd_min, or
-	 * @ref BT_AUDIO_PD_PREF_NONE to indicate no preference.
-	 */
-	uint32_t pref_pd_max;
-};
-
 /** Periodic advertising state reported by the Scan Delegator */
 enum bt_bap_pa_state {
 	/** The periodic advertising has not been synchronized */
@@ -460,7 +375,7 @@ enum bt_bap_bass_att_err {
 };
 
 /** Value indicating that the periodic advertising interval is unknown */
-#define BT_BAP_PA_INTERVAL_UNKNOWN             0xFFFF
+#define BT_BAP_PA_INTERVAL_UNKNOWN             0xFFFFU
 
 /**
  * @brief Broadcast Assistant no BIS sync preference
@@ -468,9 +383,9 @@ enum bt_bap_bass_att_err {
  * Value indicating that the Broadcast Assistant has no preference to which BIS
  * the Scan Delegator syncs to
  */
-#define BT_BAP_BIS_SYNC_NO_PREF 0xFFFFFFFF
+#define BT_BAP_BIS_SYNC_NO_PREF 0xFFFFFFFFU
 /** BIS sync value indicating that the BIG sync has failed for any reason */
-#define BT_BAP_BIS_SYNC_FAILED  0xFFFFFFFF
+#define BT_BAP_BIS_SYNC_FAILED  0xFFFFFFFFU
 
 /** Endpoint states */
 enum bt_bap_ep_state {
@@ -492,152 +407,32 @@ enum bt_bap_ep_state {
 	/** Audio Stream Endpoint Disabling state */
 	BT_BAP_EP_STATE_DISABLING = 0x05,
 
-	/** Audio Stream Endpoint Streaming state */
+	/** Audio Stream Endpoint Releasing state */
 	BT_BAP_EP_STATE_RELEASING = 0x06,
 };
 
 /**
- * @brief Response Status Code
- *
- * These are sent by the server to the client when a stream operation is
- * requested.
+ * @struct bt_bap_broadcast_source
+ * @brief Abstract Audio Broadcast Source structure.
  */
-enum bt_bap_ascs_rsp_code {
-	/** Server completed operation successfully */
-	BT_BAP_ASCS_RSP_CODE_SUCCESS = 0x00,
-	/** Server did not support operation by client */
-	BT_BAP_ASCS_RSP_CODE_NOT_SUPPORTED = 0x01,
-	/** Server rejected due to invalid operation length */
-	BT_BAP_ASCS_RSP_CODE_INVALID_LENGTH = 0x02,
-	/** Invalid ASE ID */
-	BT_BAP_ASCS_RSP_CODE_INVALID_ASE = 0x03,
-	/** Invalid ASE state */
-	BT_BAP_ASCS_RSP_CODE_INVALID_ASE_STATE = 0x04,
-	/** Invalid operation for direction */
-	BT_BAP_ASCS_RSP_CODE_INVALID_DIR = 0x05,
-	/** Capabilities not supported by server */
-	BT_BAP_ASCS_RSP_CODE_CAP_UNSUPPORTED = 0x06,
-	/** Configuration parameters not supported by server */
-	BT_BAP_ASCS_RSP_CODE_CONF_UNSUPPORTED = 0x07,
-	/** Configuration parameters rejected by server */
-	BT_BAP_ASCS_RSP_CODE_CONF_REJECTED = 0x08,
-	/** Invalid Configuration parameters */
-	BT_BAP_ASCS_RSP_CODE_CONF_INVALID = 0x09,
-	/** Unsupported metadata */
-	BT_BAP_ASCS_RSP_CODE_METADATA_UNSUPPORTED = 0x0a,
-	/** Metadata rejected by server */
-	BT_BAP_ASCS_RSP_CODE_METADATA_REJECTED = 0x0b,
-	/** Invalid metadata */
-	BT_BAP_ASCS_RSP_CODE_METADATA_INVALID = 0x0c,
-	/** Server has insufficient resources */
-	BT_BAP_ASCS_RSP_CODE_NO_MEM = 0x0d,
-	/** Unspecified error */
-	BT_BAP_ASCS_RSP_CODE_UNSPECIFIED = 0x0e,
-};
-
-/**
- * @brief Response Reasons
- *
- * These are used if the @ref bt_bap_ascs_rsp_code value is
- * @ref BT_BAP_ASCS_RSP_CODE_CONF_UNSUPPORTED, @ref BT_BAP_ASCS_RSP_CODE_CONF_REJECTED or
- * @ref BT_BAP_ASCS_RSP_CODE_CONF_INVALID.
- */
-enum bt_bap_ascs_reason {
-	/** No reason */
-	BT_BAP_ASCS_REASON_NONE = 0x00,
-	/** Codec ID */
-	BT_BAP_ASCS_REASON_CODEC = 0x01,
-	/** Codec configuration */
-	BT_BAP_ASCS_REASON_CODEC_DATA = 0x02,
-	/** SDU interval */
-	BT_BAP_ASCS_REASON_INTERVAL = 0x03,
-	/** Framing */
-	BT_BAP_ASCS_REASON_FRAMING = 0x04,
-	/** PHY */
-	BT_BAP_ASCS_REASON_PHY = 0x05,
-	/** Maximum SDU size*/
-	BT_BAP_ASCS_REASON_SDU = 0x06,
-	/** RTN */
-	BT_BAP_ASCS_REASON_RTN = 0x07,
-	/** Max transport latency */
-	BT_BAP_ASCS_REASON_LATENCY = 0x08,
-	/** Presendation delay */
-	BT_BAP_ASCS_REASON_PD = 0x09,
-	/** Invalid CIS mapping */
-	BT_BAP_ASCS_REASON_CIS = 0x0a,
-};
-
-/** @brief Structure storing values of fields of ASE Control Point notification. */
-struct bt_bap_ascs_rsp {
-	/**
-	 * @brief Value of the Response Code field.
-	 *
-	 * The following response codes are accepted:
-	 * - @ref BT_BAP_ASCS_RSP_CODE_SUCCESS
-	 * - @ref BT_BAP_ASCS_RSP_CODE_CAP_UNSUPPORTED
-	 * - @ref BT_BAP_ASCS_RSP_CODE_CONF_UNSUPPORTED
-	 * - @ref BT_BAP_ASCS_RSP_CODE_CONF_REJECTED
-	 * - @ref BT_BAP_ASCS_RSP_CODE_METADATA_UNSUPPORTED
-	 * - @ref BT_BAP_ASCS_RSP_CODE_METADATA_REJECTED
-	 * - @ref BT_BAP_ASCS_RSP_CODE_NO_MEM
-	 * - @ref BT_BAP_ASCS_RSP_CODE_UNSPECIFIED
-	 */
-	enum bt_bap_ascs_rsp_code code;
-
-	/**
-	 * @brief Value of the Reason field.
-	 *
-	 * The meaning of this value depend on the Response Code field.
-	 */
-	union {
-		/**
-		 * @brief Response reason
-		 *
-		 * If the Response Code is one of the following:
-		 * - @ref BT_BAP_ASCS_RSP_CODE_CONF_UNSUPPORTED
-		 * - @ref BT_BAP_ASCS_RSP_CODE_CONF_REJECTED
-		 * all values from @ref bt_bap_ascs_reason can be used.
-		 *
-		 * If the Response Code is one of the following:
-		 * - @ref BT_BAP_ASCS_RSP_CODE_SUCCESS
-		 * - @ref BT_BAP_ASCS_RSP_CODE_CAP_UNSUPPORTED
-		 * - @ref BT_BAP_ASCS_RSP_CODE_NO_MEM
-		 * - @ref BT_BAP_ASCS_RSP_CODE_UNSPECIFIED
-		 * only value @ref BT_BAP_ASCS_REASON_NONE shall be used.
-		 */
-		enum bt_bap_ascs_reason reason;
-
-		/**
-		 * @brief Response metadata type
-		 *
-		 * If the Response Code is one of the following:
-		 * - @ref BT_BAP_ASCS_RSP_CODE_METADATA_UNSUPPORTED
-		 * - @ref BT_BAP_ASCS_RSP_CODE_METADATA_REJECTED
-		 * the value of the Metadata Type shall be used.
-		 */
-		enum bt_audio_metadata_type metadata_type;
-	};
-};
-
-/**
- * @brief Macro used to initialise the object storing values of ASE Control Point notification.
- *
- * @param c Response Code field
- * @param r Reason field - @ref bt_bap_ascs_reason or @ref bt_audio_metadata_type (see notes in
- *          @ref bt_bap_ascs_rsp).
- */
-#define BT_BAP_ASCS_RSP(c, r) (struct bt_bap_ascs_rsp) { .code = c, .reason = r }
-
-/** @brief Abstract Audio Broadcast Source structure. */
 struct bt_bap_broadcast_source;
 
-/** @brief Abstract Audio Broadcast Sink structure. */
+/**
+ * @struct bt_bap_broadcast_sink
+ * @brief Abstract Audio Broadcast Sink structure.
+ */
 struct bt_bap_broadcast_sink;
 
-/** @brief Abstract Audio Unicast Group structure. */
+/**
+ * @struct bt_bap_unicast_group
+ * @brief Abstract Audio Unicast Group structure.
+ */
 struct bt_bap_unicast_group;
 
-/** @brief Abstract Audio Endpoint structure. */
+/**
+ * @struct bt_bap_ep
+ * @brief Abstract Audio Endpoint structure.
+ */
 struct bt_bap_ep;
 
 /** Struct to hold subgroup specific information for the receive state */
@@ -883,6 +678,22 @@ struct bt_bap_ep_info {
 int bt_bap_ep_get_info(const struct bt_bap_ep *ep, struct bt_bap_ep_info *info);
 
 /**
+ * @brief Get the pointer to the ACL connection of an endpoint
+ *
+ * The caller gets a new reference to the connection object, if not NULL, which must be
+ * released with bt_conn_unref() once done using the object.
+ *
+ * @param ep The endpoint to get the ACL connection of
+ *
+ * @return The ACL connection pointer, or NULL if:
+ *         - @p ep is NULL
+ *         - @p ep is a broadcast endpoint
+ *         - @p ep is a Unicast Server endpoint not yet configured by a remote client
+ *         - @p ep is a Unicast Client endpoint not yet discovered on a remote server
+ */
+struct bt_conn *bt_bap_ep_get_conn(const struct bt_bap_ep *ep);
+
+/**
  * @brief Basic Audio Profile stream structure.
  *
  * Streams represents a stream configuration of a Remote Endpoint and a Local Capability.
@@ -897,11 +708,19 @@ struct bt_bap_stream {
 	/** Endpoint reference */
 	struct bt_bap_ep *ep;
 
-	/** Codec Configuration */
-	struct bt_audio_codec_cfg *codec_cfg;
+	/**
+	 * @brief Codec Configuration
+	 *
+	 * Only valid if the endpoint for this stream is non-NULL.
+	 */
+	const struct bt_audio_codec_cfg *codec_cfg;
 
-	/** QoS Configuration */
-	struct bt_bap_qos_cfg *qos;
+	/** QoS Configuration
+	 *
+	 * Only valid if the endpoint for this stream is non-NULL and the state is
+	 * @ref BT_BAP_EP_STATE_QOS_CONFIGURED or higher.
+	 */
+	const struct bt_bap_qos_cfg *qos;
 
 	/** Audio stream operations */
 	struct bt_bap_stream_ops *ops;
@@ -1113,7 +932,7 @@ void bt_bap_stream_cb_register(struct bt_bap_stream *stream, struct bt_bap_strea
  * @return Allocated Audio Stream object or NULL in case of error.
  */
 int bt_bap_stream_config(struct bt_conn *conn, struct bt_bap_stream *stream, struct bt_bap_ep *ep,
-			 struct bt_audio_codec_cfg *codec_cfg);
+			 const struct bt_audio_codec_cfg *codec_cfg);
 
 /**
  * @brief Reconfigure Audio Stream
@@ -1128,7 +947,8 @@ int bt_bap_stream_config(struct bt_conn *conn, struct bt_bap_stream *stream, str
  *
  * @return 0 in case of success or negative value in case of error.
  */
-int bt_bap_stream_reconfig(struct bt_bap_stream *stream, struct bt_audio_codec_cfg *codec_cfg);
+int bt_bap_stream_reconfig(struct bt_bap_stream *stream,
+			   const struct bt_audio_codec_cfg *codec_cfg);
 
 /**
  * @brief Configure Audio Stream QoS
@@ -1205,7 +1025,7 @@ int bt_bap_stream_disable(struct bt_bap_stream *stream);
  * @retval 0 in case of success
  * @retval -EINVAL if the stream, endpoint, ISO channel or connection is NULL
  * @retval -EBADMSG if the stream or ISO channel is in an invalid state for connection
- * @retval -EOPNOTSUPP if the role of the stream is not @ref BT_HCI_ROLE_CENTRAL
+ * @retval -EOPNOTSUPP if the role of the stream is not @ref BT_CONN_ROLE_CENTRAL
  * @retval -EALREADY if the ISO channel is already connecting or connected
  * @retval -EBUSY if another ISO channel is connecting
  * @retval -ENOEXEC if otherwise rejected by the ISO layer
@@ -1249,7 +1069,7 @@ int bt_bap_stream_start(struct bt_bap_stream *stream);
  *
  * @retval 0 Success
  * @retval -EINVAL The @p stream does not have an endpoint or a connection, of the stream's
- *                 connection's role is not @p BT_HCI_ROLE_CENTRAL
+ *                 connection's role is not @p BT_CONN_ROLE_CENTRAL
  * @retval -EBADMSG The state of the @p stream endpoint is not @ref BT_BAP_EP_STATE_DISABLING
  * @retval -EALREADY The CIS state of the @p is not in a connected state, and thus is already
  *                   stopping
@@ -1516,8 +1336,6 @@ int bt_bap_unicast_server_unregister(void);
  *
  * Only one callback structure can be registered, and attempting to
  * registering more than one will result in an error.
- * Prior to calling this function the Unicast Server needs to be
- * registered with bt_bap_unicast_server_register().
  *
  * @param cb  Unicast server callback structure.
  *
@@ -1531,9 +1349,6 @@ int bt_bap_unicast_server_register_cb(const struct bt_bap_unicast_server_cb *cb)
  * May only unregister a callback structure that has previously been
  * registered by bt_bap_unicast_server_register_cb().
  *
- * Calling this function will issue an release operation on any ASE
- * in a non-idle state.
- *
  * @param cb  Unicast server callback structure.
  *
  * @return 0 in case of success or negative value in case of error.
@@ -1546,8 +1361,11 @@ int bt_bap_unicast_server_unregister_cb(const struct bt_bap_unicast_server_cb *c
  *
  * @param ep The structure object with endpoint info.
  * @param user_data Data to pass to the function.
+ *
+ * @retval true Continue iterating.
+ * @retval false Stop iterating.
  */
-typedef void (*bt_bap_ep_func_t)(struct bt_bap_ep *ep, void *user_data);
+typedef bool (*bt_bap_ep_func_t)(struct bt_bap_ep *ep, void *user_data);
 
 /**
  * @brief Iterate through all endpoints of the given connection.
@@ -1555,8 +1373,12 @@ typedef void (*bt_bap_ep_func_t)(struct bt_bap_ep *ep, void *user_data);
  * @param conn Connection object
  * @param func Function to call for each endpoint.
  * @param user_data Data to pass to the callback function.
+ *
+ * @retval 0 Success
+ * @retval -ECANCELED Iteration was stopped by the callback function before complete.
+ * @retval -EINVAL @p conn or @p func were NULL.
  */
-void bt_bap_unicast_server_foreach_ep(struct bt_conn *conn, bt_bap_ep_func_t func, void *user_data);
+int bt_bap_unicast_server_foreach_ep(struct bt_conn *conn, bt_bap_ep_func_t func, void *user_data);
 
 /**
  * @brief Initialize and configure a new ASE.
@@ -1569,7 +1391,7 @@ void bt_bap_unicast_server_foreach_ep(struct bt_conn *conn, bt_bap_ep_func_t fun
  * @return 0 in case of success or negative value in case of error.
  */
 int bt_bap_unicast_server_config_ase(struct bt_conn *conn, struct bt_bap_stream *stream,
-				     struct bt_audio_codec_cfg *codec_cfg,
+				     const struct bt_audio_codec_cfg *codec_cfg,
 				     const struct bt_bap_qos_cfg_pref *qos_pref);
 
 /** @} */ /* End of group bt_bap_unicast_server */
@@ -1586,7 +1408,7 @@ struct bt_bap_unicast_group_stream_param {
 	struct bt_bap_stream *stream;
 
 	/** The QoS settings for the stream object. */
-	struct bt_bap_qos_cfg *qos;
+	const struct bt_bap_qos_cfg *qos;
 };
 
 /**
@@ -1726,8 +1548,8 @@ int bt_bap_unicast_group_delete(struct bt_bap_unicast_group *unicast_group);
  * @param stream     The audio stream
  * @param user_data  User data
  *
- * @retval true Stop iterating.
- * @retval false Continue iterating.
+ * @retval true Continue iterating.
+ * @retval false Stop iterating.
  */
 typedef bool (*bt_bap_unicast_group_foreach_stream_func_t)(struct bt_bap_stream *stream,
 							   void *user_data);
@@ -1751,13 +1573,17 @@ int bt_bap_unicast_group_foreach_stream(struct bt_bap_unicast_group *unicast_gro
 struct bt_bap_unicast_group_info {
 	/** Presentation delay for sink ASEs
 	 *
-	 * Will be @ref BT_BAP_PD_UNSET if no sink ASEs have been QoS configured
+	 * Will be @ref BT_BAP_PD_UNSET if no sink streams have been added to group.
+	 * The value does not reflect what has been configured on any remote ASEs, but only the
+	 * local value from when the group was created or reconfigured.
 	 */
 	uint32_t sink_pd;
 
 	/** Presentation delay for source ASEs
 	 *
-	 * Will be @ref BT_BAP_PD_UNSET if no source ASEs have been QoS configured
+	 * Will be @ref BT_BAP_PD_UNSET if no source streams have been added to group.
+	 * The value does not reflect what has been configured on any remote ASEs, but only the
+	 * local value from when the group was created or reconfigured.
 	 */
 	uint32_t source_pd;
 };
@@ -1785,10 +1611,21 @@ struct bt_bap_unicast_client_cb {
 	 * @param conn  Connection to the remote unicast server.
 	 * @param dir   Direction of the location.
 	 * @param loc   The location bitfield value.
-	 *
-	 * @return 0 in case of success or negative value in case of error.
 	 */
 	void (*location)(struct bt_conn *conn, enum bt_audio_dir dir, enum bt_audio_location loc);
+
+	/**
+	 * @brief Remote Unicast Server Supported Contexts
+	 *
+	 * This callback is called whenever the supported contexts are read
+	 * from the server or otherwise notified to the client.
+	 *
+	 * @param conn     Connection to the remote unicast server.
+	 * @param snk_ctx  The sink context bitfield value.
+	 * @param src_ctx  The source context bitfield value.
+	 */
+	void (*supported_contexts)(struct bt_conn *conn, enum bt_audio_context snk_ctx,
+				   enum bt_audio_context src_ctx);
 
 	/**
 	 * @brief Remote Unicast Server Available Contexts
@@ -1799,8 +1636,6 @@ struct bt_bap_unicast_client_cb {
 	 * @param conn     Connection to the remote unicast server.
 	 * @param snk_ctx  The sink context bitfield value.
 	 * @param src_ctx  The source context bitfield value.
-	 *
-	 * @return 0 in case of success or negative value in case of error.
 	 */
 	void (*available_contexts)(struct bt_conn *conn, enum bt_audio_context snk_ctx,
 				   enum bt_audio_context src_ctx);
@@ -1991,8 +1826,17 @@ int bt_bap_unicast_client_unregister_cb(struct bt_bap_unicast_client_cb *cb);
  * This procedure is used by a client to discover remote capabilities and
  * endpoints and notifies via params callback.
  *
- * @param conn   Connection object
+ * @param conn   The ACL connection. The connection must already conform to the security
+ *               requirements of the Basic Audio Profile.
  * @param dir    The type of remote endpoints and capabilities to discover.
+ *
+ * @retval 0 Success
+ * @retval -EINVAL @p conn is NULL, not a central connection or does not conform to security
+ *                 requirements, or @p dir is invalid.
+ * @retval -EBUSY Another operation is already in progress for this @p conn
+ * @retval -ENOTCONN @p conn is not connected
+ * @retval -ENOMEM Could not allocate memory for the request
+ * @retval -ENOEXEC Unexpected GATT error
  */
 int bt_bap_unicast_client_discover(struct bt_conn *conn, enum bt_audio_dir dir);
 
@@ -2271,7 +2115,7 @@ struct bt_bap_broadcast_source_stream_param {
 	size_t data_len;
 
 	/** BIS Codec Specific Configuration */
-	uint8_t *data;
+	const uint8_t *data;
 #endif /* CONFIG_BT_AUDIO_CODEC_CFG_MAX_DATA_SIZE > 0 */
 };
 
@@ -2284,7 +2128,7 @@ struct bt_bap_broadcast_source_subgroup_param {
 	struct bt_bap_broadcast_source_stream_param *params;
 
 	/** Subgroup Codec configuration. */
-	struct bt_audio_codec_cfg *codec_cfg;
+	const struct bt_audio_codec_cfg *codec_cfg;
 };
 
 /** Broadcast Source create parameters */
@@ -2296,7 +2140,7 @@ struct bt_bap_broadcast_source_param {
 	struct bt_bap_broadcast_source_subgroup_param *params;
 
 	/** Quality of Service configuration. */
-	struct bt_bap_qos_cfg *qos;
+	const struct bt_bap_qos_cfg *qos;
 
 	/**
 	 * @brief Broadcast Source packing mode.
@@ -2469,8 +2313,8 @@ int bt_bap_broadcast_source_get_base(struct bt_bap_broadcast_source *source,
  * @param stream     The audio stream
  * @param user_data  User data
  *
- * @retval true  Stop iterating.
- * @retval false Continue iterating.
+ * @retval true  Continue iterating.
+ * @retval false Stop iterating.
  */
 typedef bool (*bt_bap_broadcast_source_foreach_stream_func_t)(struct bt_bap_stream *stream,
 							      void *user_data);
@@ -2483,7 +2327,7 @@ typedef bool (*bt_bap_broadcast_source_foreach_stream_func_t)(struct bt_bap_stre
  * @param user_data      User specified data that is sent to the callback function
  *
  * @retval 0          Success (even if no streams exists in the broadcast source).
- * @retval -ECANCELED The @p func returned true.
+ * @retval -ECANCELED The @p func returned false and stopped the iteration.
  * @retval -EINVAL    @p source or @p func were NULL.
  */
 int bt_bap_broadcast_source_foreach_stream(struct bt_bap_broadcast_source *source,
@@ -2590,7 +2434,7 @@ int bt_bap_broadcast_sink_create(struct bt_le_per_adv_sync *pa_sync, uint32_t br
  *
  * @param sink               Pointer to the sink object from the base_recv callback.
  * @param indexes_bitfield   Bitfield of the BIS index to sync to. To sync to e.g. BIS index 1 and
- *                           2, this should have the value of BIT(1) | BIT(2).
+ *                           2, this should have the value of BIT(1U) | BIT(2U).
  * @param streams            Stream object pointers to be used for the receiver. If multiple BIS
  *                           indexes shall be synchronized, multiple streams shall be provided.
  * @param broadcast_code     The 16-octet broadcast code. Shall be supplied if the broadcast is
@@ -2638,7 +2482,7 @@ int bt_bap_broadcast_sink_delete(struct bt_bap_broadcast_sink *sink);
 /**
  * @brief Register the Basic Audio Profile Scan Delegator and BASS.
  *
- * Register the scan deligator and Broadcast Audio Scan Service (BASS)
+ * Register the scan delegator and Broadcast Audio Scan Service (BASS)
  * dynamically at runtime.
  *
  * Only one set of callbacks can be registered at any one time, and calling this function multiple
@@ -2653,7 +2497,7 @@ int bt_bap_scan_delegator_register(struct bt_bap_scan_delegator_cb *cb);
 /**
  * @brief unregister the Basic Audio Profile Scan Delegator and BASS.
  *
- * Unregister the scan deligator and Broadcast Audio Scan Service (BASS)
+ * Unregister the scan delegator and Broadcast Audio Scan Service (BASS)
  * dynamically at runtime.
  *
  * @return 0 in case of success or negative value in case of error.
@@ -2936,13 +2780,14 @@ struct bt_bap_broadcast_assistant_cb {
  * Warning: Only one connection can be active at any time; discovering for a
  * new connection, will delete all previous data.
  *
- * @param conn  The connection
+ * @param conn  The ACL connection. The connection must already conform to the security requirements
+ *              of the Basic Audio Profile.
  *
  * @retval 0 Success
- * @retval -EINVAL @p conn is NULL
+ * @retval -EINVAL @p conn is NULL, does not conform to security requirements
  * @retval -EBUSY Another operation is already in progress for this @p conn
  * @retval -ENOTCONN @p conn is not connected
- * @retval -ENOMEM Could not allocated memory for the request
+ * @retval -ENOMEM Could not allocate memory for the request
  * @retval -ENOEXEC Unexpected GATT error
  */
 int bt_bap_broadcast_assistant_discover(struct bt_conn *conn);

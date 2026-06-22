@@ -291,11 +291,6 @@ static int uart_silabs_irq_is_pending(const struct device *dev)
 	return uart_silabs_irq_tx_ready(dev) || uart_silabs_irq_rx_ready(dev);
 }
 
-static int uart_silabs_irq_update(const struct device *dev)
-{
-	return 1;
-}
-
 static void uart_silabs_irq_callback_set(const struct device *dev, uart_irq_callback_user_data_t cb,
 					 void *cb_data)
 {
@@ -452,6 +447,7 @@ void uart_silabs_dma_rx_cb(const struct device *dma_dev, void *user_data, uint32
 		dma_stop(data->dma_rx.dma_dev, data->dma_rx.dma_channel);
 		data->dma_rx.enabled = false;
 		async_evt_rx_buf_release(data);
+		(void)uart_silabs_pm_lock_put(uart_dev, UART_SILABS_PM_LOCK_RX);
 		async_user_callback(data, &disabled_event);
 	}
 }
@@ -512,13 +508,14 @@ static int uart_silabs_async_tx(const struct device *dev, const uint8_t *tx_data
 		return ret;
 	}
 
+	data->dma_tx.enabled = true;
+
 	ret = dma_start(data->dma_tx.dma_dev, data->dma_tx.dma_channel);
 	if (ret) {
 		LOG_ERR("UART err: TX DMA start failed!");
+		data->dma_tx.enabled = false;
 		return ret;
 	}
-
-	data->dma_tx.enabled = true;
 
 	return 0;
 }
@@ -593,20 +590,22 @@ static int uart_silabs_async_rx_enable(const struct device *dev, uint8_t *rx_buf
 		return -EINVAL;
 	}
 
+	data->dma_rx.enabled = true;
+	(void)uart_silabs_pm_lock_get(dev, UART_SILABS_PM_LOCK_RX);
+
 	if (dma_start(data->dma_rx.dma_dev, data->dma_rx.dma_channel)) {
 		LOG_ERR("UART ERR: RX DMA start failed!");
+		data->dma_rx.enabled = false;
+		(void)uart_silabs_pm_lock_put(dev, UART_SILABS_PM_LOCK_RX);
 		return -EFAULT;
 	}
 
-	(void)uart_silabs_pm_lock_get(dev, UART_SILABS_PM_LOCK_RX);
 	USART_IntClear(config->base, USART_IF_RXOF | USART_IF_TCMP1);
 	USART_IntEnable(config->base, USART_IF_RXOF);
 
 	if (timeout >= 0) {
 		USART_IntEnable(config->base, USART_IF_TCMP1);
 	}
-
-	data->dma_rx.enabled = true;
 
 	async_evt_rx_buf_request(data);
 
@@ -1112,7 +1111,6 @@ static DEVICE_API(uart, uart_silabs_driver_api) = {
 	.irq_err_enable = uart_silabs_irq_err_enable,
 	.irq_err_disable = uart_silabs_irq_err_disable,
 	.irq_is_pending = uart_silabs_irq_is_pending,
-	.irq_update = uart_silabs_irq_update,
 	.irq_callback_set = uart_silabs_irq_callback_set,
 #endif
 #ifdef CONFIG_UART_SILABS_USART_ASYNC

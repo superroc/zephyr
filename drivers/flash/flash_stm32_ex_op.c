@@ -329,11 +329,17 @@ int flash_stm32_ex_op(const struct device *dev, uint16_t code,
 		break;
 #endif /* CONFIG_FLASH_STM32_BLOCK_REGISTERS */
 #if defined(CONFIG_FLASH_STM32_OPTION_BYTES) && ( \
+		(defined(CONFIG_DT_HAS_ST_STM32F1_FLASH_CONTROLLER_ENABLED) && \
+		defined(CONFIG_SOC_SERIES_STM32F1X)) || \
 		defined(CONFIG_DT_HAS_ST_STM32F4_FLASH_CONTROLLER_ENABLED) || \
 		defined(CONFIG_DT_HAS_ST_STM32F7_FLASH_CONTROLLER_ENABLED) || \
 		defined(CONFIG_DT_HAS_ST_STM32G0_FLASH_CONTROLLER_ENABLED) || \
 		defined(CONFIG_DT_HAS_ST_STM32G4_FLASH_CONTROLLER_ENABLED) || \
-		defined(CONFIG_DT_HAS_ST_STM32L4_FLASH_CONTROLLER_ENABLED))
+		defined(CONFIG_DT_HAS_ST_STM32L4_FLASH_CONTROLLER_ENABLED) || \
+		defined(CONFIG_DT_HAS_ST_STM32U3_FLASH_CONTROLLER_ENABLED) || \
+		(defined(CONFIG_DT_HAS_ST_STM32L5_FLASH_CONTROLLER_ENABLED) && \
+		 (defined(CONFIG_SOC_SERIES_STM32L5X) || \
+		  defined(CONFIG_SOC_SERIES_STM32U5X))))
 	case FLASH_STM32_EX_OP_OPTB_READ:
 		if (out == NULL) {
 			rv = -EINVAL;
@@ -344,7 +350,7 @@ int flash_stm32_ex_op(const struct device *dev, uint16_t code,
 		rv = 0;
 
 		break;
-	case FLASH_STM32_EX_OP_OPTB_WRITE:
+	case FLASH_STM32_EX_OP_OPTB_WRITE: {
 		int rv2;
 
 		rv = flash_stm32_option_bytes_lock(dev, false);
@@ -363,6 +369,7 @@ int flash_stm32_ex_op(const struct device *dev, uint16_t code,
 		rv = rv2;
 
 		break;
+	}
 #endif
 	}
 

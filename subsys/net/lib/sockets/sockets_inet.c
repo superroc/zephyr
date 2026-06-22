@@ -15,6 +15,7 @@ LOG_MODULE_DECLARE(net_sock, CONFIG_NET_SOCKETS_LOG_LEVEL);
 #include <zephyr/kernel.h>
 #include <zephyr/net/mld.h>
 #include <zephyr/net/net_context.h>
+#include <zephyr/net/net_log.h>
 #include <zephyr/net/net_pkt.h>
 #include <zephyr/tracing/tracing.h>
 #include <zephyr/net/socket.h>
@@ -479,6 +480,31 @@ int zsock_listen_ctx(struct net_context *ctx, int backlog)
 	return 0;
 }
 
+static int sock_get_stream_src_addr(struct net_context *ctx, struct net_sockaddr *addr,
+				    net_socklen_t *addrlen)
+{
+	if (addr != NULL && addrlen != NULL) {
+		size_t len;
+
+		if (ctx->remote.sa_family == NET_AF_INET) {
+			len = sizeof(struct net_sockaddr_in);
+		} else if (ctx->remote.sa_family == NET_AF_INET6) {
+			len = sizeof(struct net_sockaddr_in6);
+		} else {
+			return -ENOTSUP;
+		}
+
+		memcpy(addr, &ctx->remote, MIN(len, *addrlen));
+
+		/* addrlen is a value-result argument, set to actual
+		 * size of source address
+		 */
+		*addrlen = len;
+	}
+
+	return 0;
+}
+
 int zsock_accept_ctx(struct net_context *parent, struct net_sockaddr *addr,
 		     net_socklen_t *addrlen)
 {
@@ -488,6 +514,11 @@ int zsock_accept_ctx(struct net_context *parent, struct net_sockaddr *addr,
 
 	if (net_context_get_type(parent) == NET_SOCK_RAW) {
 		errno = EOPNOTSUPP;
+		return -1;
+	}
+
+	if (sock_is_error(parent)) {
+		errno = POINTER_TO_INT(parent->user_data);
 		return -1;
 	}
 
@@ -542,25 +573,13 @@ int zsock_accept_ctx(struct net_context *parent, struct net_sockaddr *addr,
 
 	net_context_set_accepting(ctx, false);
 
-
-	if (addr != NULL && addrlen != NULL) {
-		int len = MIN(*addrlen, sizeof(ctx->remote));
-
-		memcpy(addr, &ctx->remote, len);
-		/* addrlen is a value-result argument, set to actual
-		 * size of source address
-		 */
-		if (ctx->remote.sa_family == NET_AF_INET) {
-			*addrlen = sizeof(struct net_sockaddr_in);
-		} else if (ctx->remote.sa_family == NET_AF_INET6) {
-			*addrlen = sizeof(struct net_sockaddr_in6);
-		} else {
-			zvfs_free_fd(fd);
-			errno = ENOTSUP;
-			zsock_flush_queue(ctx);
-			net_context_put(ctx);
-			return -1;
-		}
+	ret = sock_get_stream_src_addr(ctx, addr, addrlen);
+	if (ret < 0) {
+		zvfs_free_fd(fd);
+		errno = -ret;
+		zsock_flush_queue(ctx);
+		net_context_put(ctx);
+		return -1;
 	}
 
 	NET_DBG("accept: ctx=%p, fd=%d", ctx, fd);
@@ -997,9 +1016,10 @@ static int insert_pktinfo(struct net_msghdr *msg, int level, int type,
 			  void *pktinfo, size_t pktinfo_len)
 {
 	struct net_cmsghdr *cmsg;
+	size_t cmsg_space = NET_CMSG_SPACE(pktinfo_len);
 
-	if (msg->msg_controllen < pktinfo_len) {
-		return -EINVAL;
+	if (msg->msg_controllen < cmsg_space) {
+		return -ENOMEM;
 	}
 
 	for (cmsg = NET_CMSG_FIRSTHDR(msg); cmsg != NULL; cmsg = NET_CMSG_NXTHDR(msg, cmsg)) {
@@ -1010,6 +1030,12 @@ static int insert_pktinfo(struct net_msghdr *msg, int level, int type,
 
 	if (cmsg == NULL) {
 		return -EINVAL;
+	}
+
+	/* Ensure the full element fits at the selected location, not just a header. */
+	if (cmsg_space > (size_t)((uint8_t *)msg->msg_control + msg->msg_controllen -
+				  (uint8_t *)cmsg)) {
+		return -ENOMEM;
 	}
 
 	cmsg->cmsg_len = NET_CMSG_LEN(pktinfo_len);
@@ -1141,7 +1167,7 @@ static int update_msg_controllen(struct net_msghdr *msg)
 		if (cmsg->cmsg_len == 0) {
 			break;
 		}
-		cmsg_space += cmsg->cmsg_len;
+		cmsg_space += NET_ALIGN_H(cmsg->cmsg_len);
 	}
 	msg->msg_controllen = cmsg_space;
 
@@ -1423,6 +1449,27 @@ static int zsock_fionread_ctx(struct net_context *ctx)
 	return MIN(ret, INT_MAX);
 }
 
+static int zsock_fionwrite_ctx(struct net_context *ctx)
+{
+	int outq_bytes;
+	int ret;
+
+	if (net_context_get_proto(ctx) != NET_IPPROTO_TCP) {
+		return -EOPNOTSUPP;
+	}
+
+	if (net_context_get_state(ctx) == NET_CONTEXT_LISTENING) {
+		return -EINVAL;
+	}
+
+	ret = net_tcp_get_outq(ctx, &outq_bytes);
+	if (ret < 0) {
+		return ret;
+	}
+
+	return outq_bytes;
+}
+
 static ssize_t zsock_recv_stream_timed(struct net_context *ctx, struct net_msghdr *msg,
 				       uint8_t *buf, size_t max_len,
 				       int flags, k_timeout_t timeout)
@@ -1509,7 +1556,8 @@ again:
 }
 
 static ssize_t zsock_recv_stream(struct net_context *ctx, struct net_msghdr *msg,
-				 void *buf, size_t max_len, int flags)
+				 void *buf, size_t max_len, int flags,
+				 struct net_sockaddr *src_addr, net_socklen_t *addrlen)
 {
 	ssize_t res;
 	size_t recv_len = 0;
@@ -1544,6 +1592,12 @@ static ssize_t zsock_recv_stream(struct net_context *ctx, struct net_msghdr *msg
 		return -1;
 	}
 
+	res = sock_get_stream_src_addr(ctx, src_addr, addrlen);
+	if (res < 0) {
+		errno = -res;
+		return -1;
+	}
+
 	if (!(flags & ZSOCK_MSG_PEEK)) {
 		net_context_update_recv_wnd(ctx, recv_len);
 	}
@@ -1564,7 +1618,7 @@ ssize_t zsock_recvfrom_ctx(struct net_context *ctx, void *buf, size_t max_len,
 	if (sock_type == NET_SOCK_DGRAM || sock_type == NET_SOCK_RAW) {
 		return zsock_recv_dgram(ctx, NULL, buf, max_len, flags, src_addr, addrlen);
 	} else if (sock_type == NET_SOCK_STREAM) {
-		return zsock_recv_stream(ctx, NULL, buf, max_len, flags);
+		return zsock_recv_stream(ctx, NULL, buf, max_len, flags, src_addr, addrlen);
 	}
 
 	__ASSERT(0, "Unknown socket type");
@@ -1598,7 +1652,8 @@ ssize_t zsock_recvmsg_ctx(struct net_context *ctx, struct net_msghdr *msg,
 		return zsock_recv_dgram(ctx, msg, NULL, max_len, flags,
 					msg->msg_name, &msg->msg_namelen);
 	} else if (sock_type == NET_SOCK_STREAM) {
-		return zsock_recv_stream(ctx, msg, NULL, max_len, flags);
+		return zsock_recv_stream(ctx, msg, NULL, max_len, flags,
+					 msg->msg_name, &msg->msg_namelen);
 	}
 
 	__ASSERT(0, "Unknown socket type");
@@ -1973,7 +2028,12 @@ int zsock_getsockopt_ctx(struct net_context *ctx, int level, int optname,
 		switch (optname) {
 		case ZSOCK_TCP_NODELAY:
 			ret = net_tcp_get_option(ctx, TCP_OPT_NODELAY, optval, optlen);
-			return ret;
+			if (ret < 0) {
+				errno = -ret;
+				return -1;
+			}
+
+			return 0;
 
 		case ZSOCK_TCP_KEEPIDLE:
 			__fallthrough;
@@ -2061,6 +2121,21 @@ int zsock_getsockopt_ctx(struct net_context *ctx, int level, int optname,
 
 			break;
 
+		case ZSOCK_IP_DONTFRAG:
+			if (IS_ENABLED(CONFIG_NET_IPV4)) {
+				ret = net_context_get_option(ctx,
+							     NET_OPT_DONT_FRAGMENT,
+							     optval, optlen);
+				if (ret < 0) {
+					errno  = -ret;
+					return -1;
+				}
+
+				return 0;
+			}
+
+			break;
+
 		case ZSOCK_IP_LOCAL_PORT_RANGE:
 			if (IS_ENABLED(CONFIG_NET_CONTEXT_CLAMP_PORT_RANGE)) {
 				ret = net_context_get_option(ctx,
@@ -2096,6 +2171,21 @@ int zsock_getsockopt_ctx(struct net_context *ctx, int level, int optname,
 		case ZSOCK_IPV6_MTU:
 			if (IS_ENABLED(CONFIG_NET_IPV6)) {
 				ret = net_context_get_option(ctx, NET_OPT_MTU,
+							     optval, optlen);
+				if (ret < 0) {
+					errno  = -ret;
+					return -1;
+				}
+
+				return 0;
+			}
+
+			break;
+
+		case ZSOCK_IPV6_DONTFRAG:
+			if (IS_ENABLED(CONFIG_NET_IPV6)) {
+				ret = net_context_get_option(ctx,
+							     NET_OPT_DONT_FRAGMENT,
 							     optval, optlen);
 				if (ret < 0) {
 					errno  = -ret;
@@ -2604,7 +2694,12 @@ int zsock_setsockopt_ctx(struct net_context *ctx, int level, int optname,
 		case ZSOCK_TCP_NODELAY:
 			ret = net_tcp_set_option(ctx,
 						 TCP_OPT_NODELAY, optval, optlen);
-			return ret;
+			if (ret < 0) {
+				errno = -ret;
+				return -1;
+			}
+
+			return 0;
 
 		case ZSOCK_TCP_KEEPIDLE:
 			__fallthrough;
@@ -2706,6 +2801,21 @@ int zsock_setsockopt_ctx(struct net_context *ctx, int level, int optname,
 
 			return 0;
 
+		case ZSOCK_IP_DONTFRAG:
+			if (IS_ENABLED(CONFIG_NET_IPV4)) {
+				ret = net_context_set_option(ctx,
+							     NET_OPT_DONT_FRAGMENT,
+							     optval, optlen);
+				if (ret < 0) {
+					errno  = -ret;
+					return -1;
+				}
+
+				return 0;
+			}
+
+			break;
+
 		case ZSOCK_IP_ADD_MEMBERSHIP:
 			if (IS_ENABLED(CONFIG_NET_IPV4)) {
 				return ipv4_multicast_group(ctx, optval,
@@ -2757,6 +2867,21 @@ int zsock_setsockopt_ctx(struct net_context *ctx, int level, int optname,
 		case ZSOCK_IPV6_MTU:
 			if (IS_ENABLED(CONFIG_NET_IPV6)) {
 				ret = net_context_set_option(ctx, NET_OPT_MTU,
+							     optval, optlen);
+				if (ret < 0) {
+					errno  = -ret;
+					return -1;
+				}
+
+				return 0;
+			}
+
+			break;
+
+		case ZSOCK_IPV6_DONTFRAG:
+			if (IS_ENABLED(CONFIG_NET_IPV6)) {
+				ret = net_context_set_option(ctx,
+							     NET_OPT_DONT_FRAGMENT,
 							     optval, optlen);
 				if (ret < 0) {
 					errno  = -ret;
@@ -3108,6 +3233,19 @@ static int sock_ioctl_vmeth(void *obj, unsigned int request, va_list args)
 		int *avail = va_arg(args, int *);
 
 		*avail = zsock_fionread_ctx(obj);
+		return 0;
+	}
+
+	case ZFD_IOCTL_FIONWRITE: {
+		int *avail = va_arg(args, int *);
+		int outq_bytes = zsock_fionwrite_ctx(obj);
+
+		if (outq_bytes < 0) {
+			errno = -outq_bytes;
+			return -1;
+		}
+
+		*avail = outq_bytes;
 		return 0;
 	}
 

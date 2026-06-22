@@ -19,6 +19,7 @@ LOG_MODULE_REGISTER(net_test, CONFIG_NET_PMTU_LOG_LEVEL);
 #include <zephyr/ztest.h>
 
 #include <zephyr/net/net_if.h>
+#include <zephyr/net/net_log.h>
 #include <zephyr/net/net_pkt.h>
 #include <zephyr/net/net_ip.h>
 #include <zephyr/net/net_core.h>
@@ -178,7 +179,7 @@ static void iface_cb(struct net_if *iface, void *user_data)
 	if_count++;
 }
 
-static void setup_mgmt_events(void)
+__maybe_unused static void setup_mgmt_events(void)
 {
 	static bool setup_done;
 
@@ -706,7 +707,7 @@ ZTEST(net_pmtu_test_suite, test_pmtu_05_ipv4_tcp)
 	 * will update the PMTU entry.
 	 */
 	ret = create_icmpv4_dest_unreach(target_iface, &s_saddr, &c_saddr, 2048, &pkt);
-	zassert_equal(ret, 0, "Failed to create ICMPv4 Destination Unrechable message");
+	zassert_equal(ret, 0, "Failed to create ICMPv4 Destination Unreachable message");
 
 	ret = net_send_data(pkt);
 	zassert_equal(ret, 0, "Failed to send Destination Unreachable message");

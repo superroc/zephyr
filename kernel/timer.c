@@ -8,6 +8,7 @@
 
 #include <zephyr/init.h>
 #include <zephyr/internal/syscall_handler.h>
+#include <zephyr/sys/check.h>
 #include <stdbool.h>
 #include <zephyr/spinlock.h>
 #include <ksched.h>
@@ -18,6 +19,50 @@ static struct k_spinlock lock;
 #ifdef CONFIG_OBJ_CORE_TIMER
 static struct k_obj_type obj_type_timer;
 #endif /* CONFIG_OBJ_CORE_TIMER */
+
+#if defined(CONFIG_TIMER_OBSERVER)
+static inline void z_timer_observer_on_init(struct k_timer *timer)
+{
+	STRUCT_SECTION_FOREACH(k_timer_observer, obs) {
+		if (obs->on_init != NULL) {
+			obs->on_init(timer);
+		}
+	}
+}
+
+static inline void z_timer_observer_on_start(struct k_timer *timer, k_timeout_t duration,
+					     k_timeout_t period)
+{
+	STRUCT_SECTION_FOREACH(k_timer_observer, obs) {
+		if (obs->on_start != NULL) {
+			obs->on_start(timer, duration, period);
+		}
+	}
+}
+
+static inline void z_timer_observer_on_stop(struct k_timer *timer)
+{
+	STRUCT_SECTION_FOREACH(k_timer_observer, obs) {
+		if (obs->on_stop != NULL) {
+			obs->on_stop(timer);
+		}
+	}
+}
+
+static inline void z_timer_observer_on_expiry(struct k_timer *timer)
+{
+	STRUCT_SECTION_FOREACH(k_timer_observer, obs) {
+		if (obs->on_expiry != NULL) {
+			obs->on_expiry(timer);
+		}
+	}
+}
+#else
+#define z_timer_observer_on_init(timer) (void)0
+#define z_timer_observer_on_start(timer, duration, period) (void)0
+#define z_timer_observer_on_stop(timer) (void)0
+#define z_timer_observer_on_expiry(timer) (void)0
+#endif /* CONFIG_TIMER_OBSERVER */
 
 /**
  * @brief Handle expiration of a kernel timer object.
@@ -30,20 +75,16 @@ void z_timer_expiration_handler(struct _timeout *t)
 	struct k_thread *thread;
 	k_spinlock_key_t key = k_spin_lock(&lock);
 
-	/* In sys_clock_announce(), when a timeout expires, it is first removed
-	 * from the timeout list, then its expiration handler is called (with
-	 * unlocked interrupts). For kernel timers, the expiration handler is
-	 * this function. Usually, the timeout structure related to the timer
-	 * that is handled here will not be linked to the timeout list at this
-	 * point. But it may happen that before this function is executed and
-	 * interrupts are locked again, a given timer gets restarted from an
-	 * interrupt context that has a priority higher than the system timer
-	 * interrupt. Then, the timeout structure for this timer will turn out
-	 * to be linked to the timeout list. And in such case, since the timer
-	 * was restarted, its expiration handler should not be executed then,
-	 * so the function exits immediately.
+	/* A same-CPU IRQ may have raced with our dispatch between
+	 * sys_clock_announce() popping us off the list and us taking
+	 * timer.c::lock. Two cases:
+	 *  - The timer was restarted (z_add_timeout re-linked the node):
+	 *    sys_dnode_is_linked() is true, the new schedule fires later.
+	 *  - The timer was stopped (z_try_abort_timeout marked the
+	 *    in-flight slot superseded): bail without firing expiry_fn.
 	 */
-	if (sys_dnode_is_linked(&t->node)) {
+	if (sys_dnode_is_linked(&t->node) ||
+	    z_timeout_inflight_superseded(t)) {
 		k_spin_unlock(&lock, key);
 		return;
 	}
@@ -56,9 +97,6 @@ void z_timer_expiration_handler(struct _timeout *t)
 	    !K_TIMEOUT_EQ(timer->period, K_FOREVER)) {
 		k_timeout_t next = timer->period;
 
-		/* see note about z_add_timeout() in z_impl_k_timer_start() */
-		next.ticks = max(next.ticks - 1, 0);
-
 #ifdef CONFIG_TIMEOUT_64BIT
 		/* Exploit the fact that uptime during a kernel
 		 * timeout handler reflects the time of the scheduled
@@ -67,11 +105,8 @@ void z_timer_expiration_handler(struct _timeout *t)
 		 * delayed for any reason, we still end up calculating
 		 * the next expiration as a regular stride from where
 		 * we "should" have run.  Requires absolute timeouts.
-		 * (Note offset by one: we're nominally at the
-		 * beginning of a tick, so need to defeat the "round
-		 * down" behavior on timeout addition).
 		 */
-		next = K_TIMEOUT_ABS_TICKS(k_uptime_ticks() + 1 + next.ticks);
+		next = K_TIMEOUT_ABS_TICKS(k_uptime_ticks() + next.ticks);
 #endif /* CONFIG_TIMEOUT_64BIT */
 		z_add_timeout(&timer->timeout, z_timer_expiration_handler,
 			      next);
@@ -80,14 +115,18 @@ void z_timer_expiration_handler(struct _timeout *t)
 	/* update timer's status */
 	timer->status += 1U;
 
+	z_timer_observer_on_expiry(timer);
+
 	/* invoke timer expiry function */
 	if (timer->expiry_fn != NULL) {
+		k_timer_expiry_t expiry_fn = timer->expiry_fn;
+
 		/* Unlock for user handler. */
 		k_spin_unlock(&lock, key);
 
 		SYS_PORT_TRACING_OBJ_FUNC_ENTER(k_timer, expiry, timer);
 
-		timer->expiry_fn(timer);
+		expiry_fn(timer);
 
 		SYS_PORT_TRACING_OBJ_FUNC_EXIT(k_timer, expiry, timer);
 
@@ -116,6 +155,57 @@ void z_timer_expiration_handler(struct _timeout *t)
 }
 
 
+int k_timer_cleanup(struct k_timer *timer)
+{
+	/* Not callable from an ISR: this is the one timer path that can
+	 * spin waiting for an in-flight handler, and an ISR spinning here
+	 * could starve the very CPU the handler needs to make progress.
+	 */
+	__ASSERT(!arch_is_in_isr(), "");
+
+	SYS_PORT_TRACING_OBJ_FUNC_ENTER(k_timer, cleanup, timer);
+
+	k_spinlock_key_t key;
+
+	/* Refuse if anyone is still pending on the timer's wait queue
+	 * (e.g. via k_timer_status_sync()): freeing the storage would
+	 * leave dangling pended_on pointers.
+	 */
+retry:
+	key = k_spin_lock(&lock);
+
+	CHECKIF(z_waitq_head(&timer->wait_q) != NULL) {
+		k_spin_unlock(&lock, key);
+		SYS_PORT_TRACING_OBJ_FUNC_EXIT(k_timer, cleanup, timer, -EAGAIN);
+		return -EAGAIN;
+	}
+
+	/* Cancel the timeout AND wait for any in-flight expiration
+	 * handler on another CPU to complete before returning. Unlike
+	 * k_timer_stop(), we do not call any user stop_fn here: the
+	 * caller is about to free the storage and there is no further
+	 * consumer of the timer.
+	 *
+	 * This is the one timer path that waits on the handler (it must,
+	 * before the storage is freed). The wait can only stall if the
+	 * handler itself blocks on this CPU making progress -- e.g. an
+	 * expiry_fn that aborts a thread running here. Freeing a timer
+	 * whose handler does that is a caller bug; ordinary stop/start do
+	 * not wait and so cannot stall.
+	 */
+	if (z_try_abort_timeout(&timer->timeout) == -EAGAIN) {
+		k_spin_unlock(&lock, key);
+		goto retry;
+	}
+
+	k_spin_unlock(&lock, key);
+
+	SYS_PORT_TRACING_OBJ_FUNC_EXIT(k_timer, cleanup, timer, 0);
+
+	return 0;
+}
+
+
 void k_timer_init(struct k_timer *timer,
 			 k_timer_expiry_t expiry_fn,
 			 k_timer_stop_t stop_fn)
@@ -139,6 +229,8 @@ void k_timer_init(struct k_timer *timer,
 #ifdef CONFIG_OBJ_CORE_TIMER
 	k_obj_core_init_and_link(K_OBJ_CORE(timer), &obj_type_timer);
 #endif /* CONFIG_OBJ_CORE_TIMER */
+
+	z_timer_observer_on_init(timer);
 }
 
 
@@ -147,46 +239,27 @@ void z_impl_k_timer_start(struct k_timer *timer, k_timeout_t duration,
 {
 	SYS_PORT_TRACING_OBJ_FUNC(k_timer, start, timer, duration, period);
 
-	/* Acquire spinlock to ensure safety during concurrent calls to
-	 * k_timer_start for scheduling or rescheduling. This is necessary
-	 * since k_timer_start can be preempted, especially for the same
-	 * timer instance.
-	 */
-	k_spinlock_key_t key = k_spin_lock(&lock);
-
 	if (K_TIMEOUT_EQ(duration, K_FOREVER)) {
-		k_spin_unlock(&lock, key);
 		return;
 	}
 
-	/* z_add_timeout() always adds one to the incoming tick count
-	 * to round up to the next tick (by convention it waits for
-	 * "at least as long as the specified timeout"), but the
-	 * period interval is always guaranteed to be reset from
-	 * within the timer ISR, so no round up is desired and 1 is
-	 * subtracted in there.
-	 *
-	 * Note that the duration (!) value gets the same treatment
-	 * for backwards compatibility.  This is unfortunate
-	 * (i.e. k_timer_start() doesn't treat its initial sleep
-	 * argument the same way k_sleep() does), but historical.  The
-	 * timer_api test relies on this behavior.
+	/* Hold the timer lock across abort + add to serialize against a
+	 * concurrent k_timer_start on the same timer. An in-flight handler
+	 * (z_try_abort_timeout() returning non-zero) is flagged superseded
+	 * and will bail; the re-arm below also re-links the node, which
+	 * makes a not-yet-committed handler bail too. Either way we do not
+	 * wait for it.
 	 */
-	if (Z_IS_TIMEOUT_RELATIVE(duration)) {
-		/* For the duration == K_NO_WAIT case, ensure that behaviour
-		 * is consistent for both 32-bit k_ticks_t which are unsigned
-		 * and 64-bit k_ticks_t which are signed.
-		 */
-		duration.ticks = max(1, duration.ticks);
-		duration.ticks = duration.ticks - 1;
-	}
+	k_spinlock_key_t key = k_spin_lock(&lock);
 
-	(void)z_abort_timeout(&timer->timeout);
+	(void)z_try_abort_timeout(&timer->timeout);
+
 	timer->period = period;
 	timer->status = 0U;
 
-	z_add_timeout(&timer->timeout, z_timer_expiration_handler,
-		     duration);
+	z_add_timeout(&timer->timeout, z_timer_expiration_handler, duration);
+
+	z_timer_observer_on_start(timer, duration, period);
 
 	k_spin_unlock(&lock, key);
 }
@@ -206,27 +279,44 @@ void z_impl_k_timer_stop(struct k_timer *timer)
 {
 	SYS_PORT_TRACING_OBJ_FUNC(k_timer, stop, timer);
 
-	bool inactive = (z_abort_timeout(&timer->timeout) != 0);
+	k_spinlock_key_t key = k_spin_lock(&lock);
 
-	if (inactive) {
+	if (z_try_abort_timeout(&timer->timeout) != 0) {
+		/* Not removed from the queue: either the timer was not
+		 * active, or its handler is in flight. In the latter case
+		 * z_try_abort_timeout() has flagged it superseded so the
+		 * handler bails; we do not wait for it. Nothing to stop here.
+		 */
+		k_spin_unlock(&lock, key);
 		return;
 	}
 
+	z_timer_observer_on_stop(timer);
+
 	if (timer->stop_fn != NULL) {
 		SYS_PORT_TRACING_OBJ_FUNC_ENTER(k_timer, stop_fn_expiry, timer);
+		k_spin_unlock(&lock, key);
 
 		timer->stop_fn(timer);
+
+		key = k_spin_lock(&lock);
 
 		SYS_PORT_TRACING_OBJ_FUNC_EXIT(k_timer, stop_fn_expiry, timer);
 	}
 
-	if (IS_ENABLED(CONFIG_MULTITHREADING)) {
-		struct k_thread *pending_thread = z_unpend1_no_timeout(&timer->wait_q);
+	if (!IS_ENABLED(CONFIG_MULTITHREADING)) {
+		k_spin_unlock(&lock, key);
+		return;
 
-		if (pending_thread != NULL) {
-			z_ready_thread(pending_thread);
-			z_reschedule_unlocked();
-		}
+	}
+
+	struct k_thread *pending_thread = z_unpend1_no_timeout(&timer->wait_q);
+
+	if (pending_thread != NULL) {
+		z_ready_thread(pending_thread);
+		z_reschedule(&lock, key);
+	} else {
+		k_spin_unlock(&lock, key);
 	}
 }
 
@@ -268,18 +358,20 @@ uint32_t z_impl_k_timer_status_sync(struct k_timer *timer)
 		uint32_t result;
 
 		do {
-			k_spinlock_key_t key = k_spin_lock(&lock);
+			unsigned int key = irq_lock();
 
 			if (!z_is_inactive_timeout(&timer->timeout)) {
 				result = *(volatile uint32_t *)&timer->status;
 				timer->status = 0U;
-				k_spin_unlock(&lock, key);
 				if (result > 0) {
+					irq_unlock(key);
 					break;
+				} else {
+					k_cpu_atomic_idle(key);
 				}
 			} else {
 				result = timer->status;
-				k_spin_unlock(&lock, key);
+				irq_unlock(key);
 				break;
 			}
 		} while (true);

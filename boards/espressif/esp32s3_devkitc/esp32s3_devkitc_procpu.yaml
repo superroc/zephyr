@@ -10,13 +10,14 @@ supported:
   - i2c
   - i2s
   - spi
-  - can
   - counter
   - watchdog
   - entropy
   - pwm
   - dma
   - input
+  - video
   - crypto
   - retained_mem
+  - netif:wifi
 vendor: espressif

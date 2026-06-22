@@ -525,8 +525,7 @@ static int handle_get_status(struct usbd_class_data *const c_data,
 	const size_t getstatus_len = 6;
 
 	if (len != getstatus_len) {
-		errno = -ENOTSUP;
-		return 0;
+		return -ENOTSUP;
 	}
 
 	/*
@@ -551,8 +550,7 @@ static int handle_get_state(struct usbd_class_data *const c_data,
 	const size_t getstate_len = 1;
 
 	if (len != getstate_len) {
-		errno = -ENOTSUP;
-		return 0;
+		return -ENOTSUP;
 	}
 
 	net_buf_add_u8(buf, data->state);
@@ -591,6 +589,11 @@ static int runtime_mode_control_to_dev(struct usbd_class_data *const c_data,
 				       const struct net_buf *const buf)
 {
 	struct usbd_dfu_data *data = usbd_class_get_private(c_data);
+
+	if (setup->wLength) {
+		errno = -ENOTSUP;
+		return 0;
+	}
 
 	errno = dfu_set_next_state(c_data, setup);
 
@@ -655,8 +658,8 @@ static int handle_upload(struct usbd_class_data *const c_data,
 			data->state = DFU_IDLE;
 		}
 	} else {
-		errno = -ENOTSUP;
 		dfu_error(c_data, DFU_ERROR, ERR_UNKNOWN);
+		return -ENOTSUP;
 	}
 
 	return 0;
@@ -668,10 +671,16 @@ static int handle_download(struct usbd_class_data *const c_data,
 {
 	struct usbd_dfu_data *data = usbd_class_get_private(c_data);
 	struct usbd_dfu_image *const image = data->image;
-	uint16_t size = MIN(setup->wLength, buf->len);
+	const uint8_t *buf_data = NULL;
+	uint16_t size = 0;
 	int ret;
 
-	ret = image->write_cb(image->priv, setup->wValue, size, buf->data);
+	if (buf != NULL) {
+		size = MIN(setup->wLength, buf->len);
+		buf_data = buf->data;
+	}
+
+	ret = image->write_cb(image->priv, setup->wValue, size, buf_data);
 	if (ret < 0) {
 		errno = -ENOTSUP;
 		dfu_error(c_data, DFU_ERROR, ERR_UNKNOWN);
@@ -714,6 +723,16 @@ static int dfu_mode_control_to_dev(struct usbd_class_data *const c_data,
 				   const struct net_buf *const buf)
 {
 	struct usbd_dfu_data *data = usbd_class_get_private(c_data);
+
+	if (setup->wLength && (buf == NULL)) {
+		if (setup->bRequest == USB_DFU_REQ_DNLOAD) {
+			/* Data OUT can be received */
+			return 0;
+		}
+
+		errno = -ENOTSUP;
+		return 0;
+	}
 
 	errno = dfu_set_next_state(c_data, setup);
 

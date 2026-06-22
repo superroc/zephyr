@@ -82,13 +82,6 @@ TESTDATA_1 = [
         None,
         None,
         None,
-        ['--shuffle-tests'],
-        '--shuffle-tests requires --subset'
-    ),
-    (
-        None,
-        None,
-        None,
         ['--shuffle-tests-seed', '0'],
         '--shuffle-tests-seed requires --shuffle-tests'
     ),
@@ -124,7 +117,6 @@ TESTDATA_1 = [
         'device serial without platform',
         'device serial with multiple platforms',
         'device flash with test without device testing',
-        'shuffle-tests without subset',
         'shuffle-tests-seed without shuffle-tests',
         'unrecognised argument',
         'pytest-twister-harness installed'
@@ -530,10 +522,13 @@ TESTDATA_6 = [
     (
         {
             'returncode': 0,
-            'stdout': '{\"ZEPHYR_TOOLCHAIN_VARIANT\": \"dummy toolchain\"}'
+            'stdout': (
+                '{\"ZEPHYR_TOOLCHAIN_VARIANT\": \"dummy toolchain\", '
+                '\"TOOLCHAIN_VARIANT_COMPILER\": \"gnu\"}'
+            )
         },
         None,
-        'Using \'dummy toolchain\' toolchain.'
+        'Using \'dummy toolchain/gnu\' toolchain variant.'
     ),
     (
         {'returncode': 1, "returnmsg": "something went wrong"},

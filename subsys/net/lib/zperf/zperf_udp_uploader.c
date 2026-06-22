@@ -9,6 +9,7 @@ LOG_MODULE_DECLARE(net_zperf, CONFIG_NET_ZPERF_LOG_LEVEL);
 
 #include <zephyr/kernel.h>
 
+#include <zephyr/net/net_log.h>
 #include <zephyr/net/socket.h>
 #include <zephyr/net/zperf.h>
 
@@ -78,7 +79,7 @@ static inline int zperf_upload_fin(int sock,
 		datagram = (struct zperf_udp_datagram *)sample_packet;
 
 		/* Fill the packet header */
-		datagram->id = net_htonl(-nb_packets);
+		datagram->id = net_htonl(-(nb_packets + 1));
 		datagram->tv_sec = net_htonl(secs);
 		datagram->tv_usec = net_htonl(usecs);
 
@@ -114,7 +115,7 @@ static inline int zperf_upload_fin(int sock,
 			continue;
 		} else {
 			/* Receive statistics */
-			ret = zsock_setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo,
+			ret = zsock_setsockopt(sock, ZSOCK_SOL_SOCKET, ZSOCK_SO_RCVTIMEO, &rcvtimeo,
 					       sizeof(rcvtimeo));
 			if (ret < 0) {
 				NET_ERR("setsockopt error (%d)", errno);
@@ -320,7 +321,7 @@ static int udp_upload(int sock, int port,
 		/* Fill the packet header */
 		datagram = (struct zperf_udp_datagram *)sample_packet;
 
-		datagram->id = net_htonl(nb_packets);
+		datagram->id = net_htonl(nb_packets + 1);
 		datagram->tv_sec = net_htonl(secs);
 		datagram->tv_usec = net_htonl(usecs);
 
@@ -391,6 +392,7 @@ static int udp_upload(int sock, int port,
 	if (ret < 0) {
 		return ret;
 	}
+	nb_packets++; /* Account for the FIN packet */
 
 	/* Add result coming from the client */
 	results->nb_packets_sent = nb_packets;
@@ -408,7 +410,7 @@ int zperf_udp_upload(const struct zperf_upload_params *param,
 	int port = 0;
 	int sock;
 	int ret;
-	struct ifreq req;
+	struct net_ifreq req;
 
 	if (param == NULL || result == NULL) {
 		return -EINVAL;
@@ -438,7 +440,7 @@ int zperf_udp_upload(const struct zperf_upload_params *param,
 
 		if (zsock_setsockopt(sock, ZSOCK_SOL_SOCKET,
 				     ZSOCK_SO_BINDTODEVICE, &req,
-				     sizeof(struct ifreq)) != 0) {
+				     sizeof(struct net_ifreq)) != 0) {
 			NET_WARN("setsockopt SO_BINDTODEVICE error (%d)", -errno);
 		}
 	}

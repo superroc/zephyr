@@ -5,6 +5,7 @@
  */
 
 #include <zephyr/kernel.h>
+#include <zephyr/devicetree.h>
 #include <zephyr/arch/arm/mpu/arm_mpu_mem_cfg.h>
 
 extern const uint32_t __rom_region_start;
@@ -13,26 +14,30 @@ extern const uint32_t __rom_region_mpu_size_bits;
 static const struct arm_mpu_region mpu_regions[] = {
 
 	/* clang-format off */
+#if DT_NODE_EXISTS(DT_NODELABEL(itcm))
 	/* Vectors is relocated to ITCM region */
 	MPU_REGION_ENTRY(
 		"itcm",
-		0x00000000,
-		REGION_128K,
+		DT_REG_ADDR(DT_NODELABEL(itcm)),
+		REGION_CUSTOMED_MEMORY_SIZE(DT_REG_SIZE(DT_NODELABEL(itcm)) / 1024),
 		{.rasr = P_RO_U_NA_Msk |
 			 NORMAL_OUTER_INNER_NON_CACHEABLE_NON_SHAREABLE}),
+#endif
 
+#if DT_NODE_EXISTS(DT_NODELABEL(dtcm))
 	MPU_REGION_ENTRY(
 		"dtcm",
-		0x00020000,
-		REGION_128K,
+		DT_REG_ADDR(DT_NODELABEL(dtcm)),
+		REGION_CUSTOMED_MEMORY_SIZE(DT_REG_SIZE(DT_NODELABEL(dtcm)) / 1024),
 		{.rasr = P_RW_U_RW_Msk |
 			 NORMAL_OUTER_INNER_NON_CACHEABLE_NON_SHAREABLE |
 			 NOT_EXEC}),
+#endif
 
 	/* Basic SRAM mapping is all data, R/W + XN */
 	MPU_REGION_ENTRY(
 		"sram",
-		CONFIG_SRAM_BASE_ADDRESS,
+		DT_CHOSEN_SRAM_ADDR,
 		REGION_SRAM_SIZE,
 		{.rasr = P_RW_U_RW_Msk |
 			 NORMAL_OUTER_INNER_WRITE_BACK_WRITE_READ_ALLOCATE_NON_SHAREABLE |

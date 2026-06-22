@@ -72,7 +72,7 @@ static inline int z_vrfy_uart_config_get(const struct device *dev,
 static inline int z_vrfy_uart_configure(const struct device *dev,
 					const struct uart_config *cfg)
 {
-	K_OOPS(K_SYSCALL_DRIVER_UART(dev, config_get));
+	K_OOPS(K_SYSCALL_DRIVER_UART(dev, configure));
 	K_OOPS(K_SYSCALL_MEMORY_READ(cfg, sizeof(struct uart_config)));
 
 	return z_impl_uart_configure(dev, cfg);
@@ -144,16 +144,12 @@ UART_SIMPLE_VOID(irq_rx_enable)
 UART_SIMPLE_VOID(irq_rx_disable)
 UART_SIMPLE_VOID(irq_err_enable)
 UART_SIMPLE_VOID(irq_err_disable)
-UART_SIMPLE(irq_is_pending)
-UART_SIMPLE(irq_update)
 #include <zephyr/syscalls/uart_irq_tx_enable_mrsh.c>
 #include <zephyr/syscalls/uart_irq_tx_disable_mrsh.c>
 #include <zephyr/syscalls/uart_irq_rx_enable_mrsh.c>
 #include <zephyr/syscalls/uart_irq_rx_disable_mrsh.c>
 #include <zephyr/syscalls/uart_irq_err_enable_mrsh.c>
 #include <zephyr/syscalls/uart_irq_err_disable_mrsh.c>
-#include <zephyr/syscalls/uart_irq_is_pending_mrsh.c>
-#include <zephyr/syscalls/uart_irq_update_mrsh.c>
 #endif /* CONFIG_UART_INTERRUPT_DRIVEN */
 
 #ifdef CONFIG_UART_LINE_CTRL

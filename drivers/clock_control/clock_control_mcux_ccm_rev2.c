@@ -1,5 +1,5 @@
 /*
- * Copyright 2021,2024-2025 NXP
+ * Copyright 2021,2024-2026 NXP
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -22,6 +22,18 @@ static int mcux_ccm_on(const struct device *dev,
 {
 	uint32_t clock_name = (uintptr_t)sub_system;
 	uint32_t peripheral, instance;
+
+/*
+ * RT11xx MICFIL clocking:
+ * - Peripheral gate is kCLOCK_Pdm (LPCG)
+ * - Root clock is kCLOCK_Root_Mic (PDM_CLK_ROOT)
+ */
+#if defined(CONFIG_SOC_SERIES_IMXRT11XX)
+	if (clock_name == IMX_CCM_PDM_CLK) {
+		CLOCK_EnableClock(kCLOCK_Pdm);
+		return 0;
+	}
+#endif
 
 	peripheral = (clock_name & IMX_CCM_PERIPHERAL_MASK);
 	instance = (clock_name & IMX_CCM_INSTANCE_MASK);
@@ -50,6 +62,13 @@ static int mcux_ccm_on(const struct device *dev,
 		return 0;
 #endif
 #endif
+#ifdef CONFIG_MEMC_MCUX_FLEXSPI
+#ifdef CONFIG_SOC_MIMX9352
+	case IMX_CCM_FLEXSPI_CLK:
+		CLOCK_EnableClock(kCLOCK_Flexspi1);
+		return 0;
+#endif
+#endif
 	default:
 		(void)instance;
 		return 0;
@@ -68,6 +87,17 @@ static int mcux_ccm_get_subsys_rate(const struct device *dev,
 {
 	uint32_t clock_name = (size_t) sub_system;
 	uint32_t clock_root, peripheral, instance;
+
+/*
+ * RT11xx MICFIL clock query:
+ * IMX_CCM_PDM_CLK should report the MIC root clock (PDM_CLK_ROOT).
+ */
+#if defined(CONFIG_SOC_SERIES_IMXRT11XX)
+	if (clock_name == IMX_CCM_PDM_CLK) {
+		*rate = CLOCK_GetRootClockFreq(kCLOCK_Root_Mic);
+		return 0;
+	}
+#endif
 
 	peripheral = (clock_name & IMX_CCM_PERIPHERAL_MASK);
 	instance = (clock_name & IMX_CCM_INSTANCE_MASK);
@@ -322,6 +352,19 @@ static int mcux_ccm_get_subsys_rate(const struct device *dev,
 			return -EINVAL;
 		}
 		break;
+#elif defined(CONFIG_SOC_MIMX9352_M33)
+	case IMX_CCM_LPIT_CLK:
+		switch (instance) {
+		case 0:
+			clock_root = kCLOCK_Root_BusAon;
+			break;
+		case 1:
+			clock_root = kCLOCK_Root_BusWakeup;
+			break;
+		default:
+			return -EINVAL;
+		}
+		break;
 #endif
 #endif
 #ifdef CONFIG_ADC_MCUX_LPADC
@@ -330,7 +373,7 @@ static int mcux_ccm_get_subsys_rate(const struct device *dev,
 		break;
 #endif
 
-#ifdef CONFIG_ADC_MCUX_SAR_ADC
+#ifdef CONFIG_ADC_NXP_SAR_ADC
 	case IMX_CCM_SAR_ADC1_CLK:
 		clock_root = kCLOCK_Root_Adc + instance;
 		break;
@@ -358,6 +401,17 @@ static int mcux_ccm_get_subsys_rate(const struct device *dev,
 	case IMX_CCM_KPP_CLK:
 		clock_root = kCLOCK_CpuClk;
 		break;
+#endif
+
+#ifdef CONFIG_COUNTER_MCUX_SYSCTR
+#if defined(CONFIG_SOC_SERIES_IMXRT118X)
+	case IMX_CCM_SYSCTR_BASE_CLK:
+		*rate = MHZ(24);
+		return 0;
+	case IMX_CCM_SYSCTR_SLOW_CLK:
+		*rate = 32768U;
+		return 0;
+#endif
 #endif
 
 	default:
@@ -393,7 +447,8 @@ static int CCM_SET_FUNC_ATTR mcux_ccm_set_subsys_rate(const struct device *dev,
 	case IMX_CCM_FLEXSPI_CLK:
 		__fallthrough;
 	case IMX_CCM_FLEXSPI2_CLK:
-#if (defined(CONFIG_SOC_SERIES_IMXRT11XX) || defined(CONFIG_SOC_SERIES_IMXRT118X)) \
+#if (defined(CONFIG_SOC_SERIES_IMXRT11XX) || defined(CONFIG_SOC_SERIES_IMXRT118X) \
+		|| defined(CONFIG_SOC_MIMX9352)) \
 		&& defined(CONFIG_MEMC_MCUX_FLEXSPI)
 		/* The SOC is using the FlexSPI for XIP. Therefore,
 		 * the FlexSPI itself must be managed within the function,

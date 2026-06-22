@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2025 Infineon Technologies AG,
- * or an affiliate of Infineon Technologies AG.
+ * SPDX-FileCopyrightText: <text>Copyright (c) 2026 Infineon Technologies AG,
+ * or an affiliate of Infineon Technologies AG. All rights reserved.</text>
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -9,7 +9,7 @@
  * @brief I2C driver for Infineon CAT1 MCU family.
  */
 
-#define DT_DRV_COMPAT infineon_cat1_i2c
+#define DT_DRV_COMPAT infineon_i2c
 
 #include <infineon_kconfig.h>
 
@@ -19,9 +19,15 @@
 #include <zephyr/dt-bindings/clock/ifx_clock_source_common.h>
 
 #include <zephyr/logging/log.h>
-LOG_MODULE_REGISTER(i2c_infineon_cat1, CONFIG_I2C_LOG_LEVEL);
+LOG_MODULE_REGISTER(i2c_infineon, CONFIG_I2C_LOG_LEVEL);
 
 #include "cy_scb_i2c.h"
+
+#ifdef CONFIG_I2C_INFINEON_BUS_RECOVERY
+#include "i2c_bitbang.h"
+#include "i2c-priv.h"
+#include <zephyr/drivers/gpio.h>
+#endif /* CONFIG_I2C_INFINEON_BUS_RECOVERY */
 
 #define I2C_CAT1_EVENTS_MASK                                                                       \
 	(CY_SCB_I2C_MASTER_WR_CMPLT_EVENT | CY_SCB_I2C_MASTER_RD_CMPLT_EVENT |                     \
@@ -81,8 +87,13 @@ struct ifx_cat1_i2c_config {
 	const struct pinctrl_dev_config *pcfg;
 	uint8_t irq_priority;
 	uint32_t irq_num;
+	en_clk_dst_t clk_dst;
 	void (*irq_config_func)(const struct device *dev);
 	cy_cb_scb_i2c_handle_events_t i2c_handle_events_func;
+#ifdef CONFIG_I2C_INFINEON_BUS_RECOVERY
+	struct gpio_dt_spec scl;
+	struct gpio_dt_spec sda;
+#endif /* CONFIG_I2C_INFINEON_BUS_RECOVERY */
 };
 
 /* Default SCB/I2C configuration structure */
@@ -102,7 +113,6 @@ static cy_stc_scb_i2c_config_t _i2c_default_config = {
 
 typedef void (*ifx_cat1_i2c_event_callback_t)(void *callback_arg, uint32_t event);
 
-en_clk_dst_t _ifx_cat1_scb_get_clock_index(uint32_t block_num);
 int32_t ifx_cat1_uart_get_hw_block_num(CySCB_Type *reg_addr);
 
 cy_rslt_t _i2c_abort_async(const struct device *dev)
@@ -139,49 +149,49 @@ cy_rslt_t _i2c_abort_async(const struct device *dev)
 	return CY_RSLT_SUCCESS;
 }
 
-static void ifx_master_event_handler(void *callback_arg, uint32_t event)
+static void ifx_handle_target_read_event(const struct device *dev)
 {
-	const struct device *dev = (const struct device *)callback_arg;
 	struct ifx_cat1_i2c_data *data = dev->data;
 	const struct ifx_cat1_i2c_config *const config = dev->config;
 
-	if (((CY_SCB_I2C_MASTER_ERR_EVENT | CY_SCB_I2C_SLAVE_ERR_EVENT) & event) != 0) {
-		/* In case of error abort transfer */
-		(void)_i2c_abort_async(dev);
-		data->error = true;
-	}
-
-	/* Release semaphore if operation complete
-	 * When we have pending TX, RX operations, the semaphore will be released
-	 * after TX, RX complete.
+	/* Repeated-start: flush pending write data before switching to read,
+	 * since WR_CMPLT_EVENT won't fire without a STOP.
 	 */
-	if (((data->async_pending == CAT1_I2C_PENDING_TX_RX) &&
-	     ((CY_SCB_I2C_MASTER_RD_CMPLT_EVENT & event) != 0)) ||
-	    (data->async_pending != CAT1_I2C_PENDING_TX_RX)) {
-
-		/* Release semaphore (After I2C async transfer is complete) */
-		k_sem_give(&data->transfer_sem);
+	if (data->context.state == CY_SCB_I2C_SLAVE_RX) {
+		if (data->p_target_config->callbacks->write_received) {
+			for (int i = 0; i < (int)data->context.slaveRxBufferIdx; i++) {
+				data->p_target_config->callbacks->write_received(
+					data->p_target_config, data->target_wr_buffer[i]);
+			}
+		}
+		if (data->p_target_config->callbacks->stop) {
+			data->p_target_config->callbacks->stop(data->p_target_config);
+		}
 	}
+
+	if (data->p_target_config->callbacks->read_requested) {
+		data->p_target_config->callbacks->read_requested(data->p_target_config,
+								 &data->i2c_target_wr_byte);
+		Cy_SCB_I2C_SlaveConfigReadBuf(config->base, &data->i2c_target_wr_byte, 1,
+					      &data->context);
+	}
+}
+
+static void ifx_handle_target_events(const struct device *dev, uint32_t event)
+{
+	struct ifx_cat1_i2c_data *data = dev->data;
+	const struct ifx_cat1_i2c_config *const config = dev->config;
 
 	if (0 != (CY_SCB_I2C_SLAVE_READ_EVENT & event)) {
-		if (data->p_target_config->callbacks->read_requested) {
-			data->p_target_config->callbacks->read_requested(data->p_target_config,
-									 &data->i2c_target_wr_byte);
-			data->context.slaveTxBufferIdx = 0;
-			data->context.slaveTxBufferCnt = 0;
-			data->context.slaveTxBufferSize = 1;
-			data->context.slaveTxBuffer = &data->i2c_target_wr_byte;
-		}
+		ifx_handle_target_read_event(dev);
 	}
 
 	if (0 != (CY_SCB_I2C_SLAVE_RD_BUF_EMPTY_EVENT & event)) {
 		if (data->p_target_config->callbacks->read_processed) {
 			data->p_target_config->callbacks->read_processed(data->p_target_config,
 									 &data->i2c_target_wr_byte);
-			data->context.slaveTxBufferIdx = 0;
-			data->context.slaveTxBufferCnt = 0;
-			data->context.slaveTxBufferSize = 1;
-			data->context.slaveTxBuffer = &data->i2c_target_wr_byte;
+			Cy_SCB_I2C_SlaveConfigReadBuf(config->base, &data->i2c_target_wr_byte, 1,
+						      &data->context);
 		}
 	}
 
@@ -209,6 +219,26 @@ static void ifx_master_event_handler(void *callback_arg, uint32_t event)
 		if (data->p_target_config->callbacks->stop) {
 			data->p_target_config->callbacks->stop(data->p_target_config);
 		}
+	}
+}
+
+static void ifx_cat1_i2c_event_handler(void *callback_arg, uint32_t event)
+{
+	const struct device *dev = (const struct device *)callback_arg;
+	struct ifx_cat1_i2c_data *data = dev->data;
+
+	if (((CY_SCB_I2C_MASTER_ERR_EVENT | CY_SCB_I2C_SLAVE_ERR_EVENT) & event) != 0) {
+		(void)_i2c_abort_async(dev);
+		data->error = true;
+		k_sem_give(&data->transfer_sem);
+	} else if (((data->async_pending == CAT1_I2C_PENDING_TX_RX) &&
+		    ((CY_SCB_I2C_MASTER_RD_CMPLT_EVENT & event) != 0)) ||
+		   (data->async_pending != CAT1_I2C_PENDING_TX_RX)) {
+		k_sem_give(&data->transfer_sem);
+	}
+
+	if (data->p_target_config != NULL) {
+		ifx_handle_target_events(dev, event);
 	}
 }
 
@@ -286,7 +316,7 @@ uint32_t _i2c_set_peri_divider(const struct device *dev, uint32_t freq, bool is_
 		return 0;
 	}
 
-	if (_ifx_cat1_utils_peri_pclk_assign_divider(_ifx_cat1_scb_get_clock_index(block_num),
+	if (_ifx_cat1_utils_peri_pclk_assign_divider(config->clk_dst,
 						     &data->clock) == CY_SYSCLK_SUCCESS) {
 		status = ifx_cat1_clock_set_enabled(&data->clock, false, false);
 		if (status == CY_RSLT_SUCCESS) {
@@ -312,12 +342,99 @@ uint32_t _i2c_set_peri_divider(const struct device *dev, uint32_t freq, bool is_
 }
 #endif
 
+#if defined(CONFIG_SOC_FAMILY_INFINEON_PSOC4)
+/*
+ * Configure the SCB oversampling clock divider for I2C on PSoC4.
+ *
+ * Assumes freq is a valid, non-zero I2C data rate as validated by the
+ * caller (ifx_cat1_i2c_configure).
+ *
+ * The SCB requires specific oversampling clock (clk_scb) frequency ranges
+ * depending on the I2C speed and whether the device is in controller or
+ * target mode. Values below are for analog filter configuration
+ * (AF_in=1, AF_out=0, DF_in=0), matching enableDigitalFilter=false.
+ *
+ * Oversampling clock requirements (from device reference manuals):
+ *
+ * Controller mode:
+ *   100 kHz:  [1.55, 3.2] MHz   (selected: 2 MHz)
+ *   400 kHz:  [7.82, 10] MHz    (selected: 8 MHz)
+ *   1 MHz:    [16.15, 25.29] MHz (selected: 24 MHz)
+ *
+ * Target mode:
+ *   100 kHz:  [1.55, 12.8] MHz  (selected: 8 MHz)
+ *   400 kHz:  [7.82, 15.38] MHz (selected: 12 MHz)
+ *   1 MHz:    [15.84, 89.0] MHz (selected: 24 MHz)
+ */
+static int _i2c_set_peri_divider_psoc4(const struct device *dev, uint32_t freq,
+				       bool is_target_mode)
+{
+/* Controller mode oversampling clock frequencies */
+#define _PSOC4_SCB_PERI_CLOCK_CTRL_STD  2000000UL
+#define _PSOC4_SCB_PERI_CLOCK_CTRL_FST  8000000UL
+#define _PSOC4_SCB_PERI_CLOCK_CTRL_FSTP 24000000UL
+
+/* Target mode oversampling clock frequencies */
+#define _PSOC4_SCB_PERI_CLOCK_TGT_STD   8000000UL
+#define _PSOC4_SCB_PERI_CLOCK_TGT_FST   12000000UL
+#define _PSOC4_SCB_PERI_CLOCK_TGT_FSTP  24000000UL
+
+	struct ifx_cat1_i2c_data *data = dev->data;
+	const struct ifx_cat1_i2c_config *const config = dev->config;
+	CySCB_Type *base = config->base;
+	uint32_t peri_freq = 0;
+	uint32_t source_freq;
+	uint32_t div_value;
+	cy_rslt_t status;
+
+	/* Map I2C data rate to the required SCB oversampling clock frequency */
+	if (freq <= CY_SCB_I2C_STD_DATA_RATE) {
+		peri_freq = is_target_mode ? _PSOC4_SCB_PERI_CLOCK_TGT_STD
+					   : _PSOC4_SCB_PERI_CLOCK_CTRL_STD;
+	} else if (freq <= CY_SCB_I2C_FST_DATA_RATE) {
+		peri_freq = is_target_mode ? _PSOC4_SCB_PERI_CLOCK_TGT_FST
+					   : _PSOC4_SCB_PERI_CLOCK_CTRL_FST;
+	} else if (freq <= CY_SCB_I2C_FSTP_DATA_RATE) {
+		peri_freq = is_target_mode ? _PSOC4_SCB_PERI_CLOCK_TGT_FSTP
+					   : _PSOC4_SCB_PERI_CLOCK_CTRL_FSTP;
+	}
+
+	/* Get HFCLK frequency (source for peripheral dividers on PSoC4) */
+	source_freq = Cy_SysClk_ClkHfGetFrequency();
+	__ASSERT(source_freq > 0, "HFCLK frequency is invalid.");
+
+	/* Calculate divider: output_freq = source_freq / div_value */
+	div_value = source_freq / peri_freq;
+
+	/* Set divider (following UART driver convention using utility wrappers) */
+	if ((data->clock.block & 0x02) == 0) {
+		status = ifx_cat1_utils_peri_pclk_set_divider(config->clk_dst,
+								&data->clock, div_value - 1);
+	} else {
+		status = ifx_cat1_utils_peri_pclk_set_frac_divider(config->clk_dst,
+								&data->clock, div_value - 1, 0);
+	}
+
+	__ASSERT(status == CY_SYSCLK_SUCCESS,
+		 "Failed to set peripheral clock divider (status=0x%x)",
+		 (unsigned int)status);
+
+	uint32_t actual_peri_freq = ifx_cat1_utils_peri_pclk_get_frequency(
+		config->clk_dst, &data->clock);
+
+	Cy_SCB_I2C_SetDataRate(base, freq, actual_peri_freq);
+
+	return 0;
+}
+#endif /* CONFIG_SOC_FAMILY_INFINEON_PSOC4 */
+
 static int ifx_cat1_i2c_configure(const struct device *dev, uint32_t dev_config)
 {
 	struct ifx_cat1_i2c_data *data = dev->data;
 	const struct ifx_cat1_i2c_config *config = dev->config;
 	cy_en_scb_i2c_status_t rslt;
 	int ret;
+	bool is_target_mode = false;
 
 	if (dev_config != 0) {
 		switch (I2C_SPEED_GET(dev_config)) {
@@ -343,9 +460,13 @@ static int ifx_cat1_i2c_configure(const struct device *dev, uint32_t dev_config)
 
 		if (dev_config & I2C_MODE_CONTROLLER) {
 			_i2c_default_config.i2cMode = CY_SCB_I2C_MASTER;
+			is_target_mode = false;
 		} else {
 			_i2c_default_config.i2cMode = CY_SCB_I2C_SLAVE;
+			is_target_mode = true;
 		}
+	} else {
+		is_target_mode = (_i2c_default_config.i2cMode == CY_SCB_I2C_SLAVE);
 	}
 
 	/* Acquire semaphore (block I2C operation for another thread) */
@@ -356,7 +477,16 @@ static int ifx_cat1_i2c_configure(const struct device *dev, uint32_t dev_config)
 
 	_i2c_default_config.slaveAddress = data->slave_address;
 
-	/* Configure the I2C resource to be master */
+	if (is_target_mode) {
+		_i2c_default_config.slaveAddressMask = 0xFE;
+		_i2c_default_config.ackGeneralAddr = false;
+	}
+
+	/* De-initialize SCB before re-configuring (required when switching modes) */
+	Cy_SCB_I2C_Disable(config->base, &data->context);
+	Cy_SCB_I2C_DeInit(config->base);
+
+	/* Configure the I2C resource */
 	rslt = Cy_SCB_I2C_Init(config->base, &_i2c_default_config, &data->context);
 	if (rslt != CY_SCB_I2C_SUCCESS) {
 		LOG_ERR("I2C configure failed with err 0x%x", rslt);
@@ -367,14 +497,27 @@ static int ifx_cat1_i2c_configure(const struct device *dev, uint32_t dev_config)
 #ifdef USE_I2C_SET_PERI_DIVIDER
 	_i2c_set_peri_divider(dev, CAT1_I2C_SPEED_STANDARD_HZ,
 			      (_i2c_default_config.i2cMode == CY_SCB_I2C_SLAVE));
-
+#elif defined(CONFIG_SOC_FAMILY_INFINEON_PSOC4)
+	if (_i2c_set_peri_divider_psoc4(dev, data->frequencyhal_hz, is_target_mode) != 0) {
+		LOG_ERR("Failed to configure I2C peripheral clock divider");
+		k_sem_give(&data->operation_sem);
+		return -EIO;
+	}
 #endif
 
+#if defined(CONFIG_SOC_FAMILY_INFINEON_PSOC4)
+	Cy_SCB_I2C_Enable(config->base, &data->context);
+#else
 	Cy_SCB_I2C_Enable(config->base);
+#endif
 	irq_enable(config->irq_num);
 
-	/* Register an I2C event callback handler */
-	ifx_cat1_i2c_register_callback(dev, ifx_master_event_handler, (void *)dev);
+	/* Register an I2C event callback handler - explicitly drop the const here
+	 * to maintain backwards compatibility. This warning went unnoticed in past
+	 * iterations, and the proper fix of propagating the const may generate
+	 * build warnings for active users / old applications
+	 */
+	ifx_cat1_i2c_register_callback(dev, ifx_cat1_i2c_event_handler, (void *)(uintptr_t)dev);
 
 #ifdef CONFIG_PM
 	data->i2c_deep_sleep_param.context = &data->context;
@@ -443,11 +586,16 @@ static int _i2c_master_transfer_async(const struct device *dev, uint16_t address
 
 	if (tx_size) {
 		data->pending = (rx_size) ? CAT1_I2C_PENDING_TX_RX : CAT1_I2C_PENDING_TX;
+		data->tx_config.xferPending = (rx_size != 0u);
 		Cy_SCB_I2C_MasterWrite(config->base, &data->tx_config, &data->context);
 		/* Receive covered by interrupt handler - i2c_isr_handler() */
 	} else if (rx_size) {
 		data->pending = CAT1_I2C_PENDING_RX;
 		Cy_SCB_I2C_MasterRead(config->base, &data->rx_config, &data->context);
+	} else if (tx != NULL) {
+		/* 0-byte write for address probing (i2c scan) */
+		data->pending = CAT1_I2C_PENDING_TX;
+		Cy_SCB_I2C_MasterWrite(config->base, &data->tx_config, &data->context);
 	} else {
 		return -EIO;
 	}
@@ -462,10 +610,6 @@ static int ifx_cat1_i2c_transfer(const struct device *dev, struct i2c_msg *msg, 
 	struct i2c_msg *rx_msg;
 	struct ifx_cat1_i2c_data *data = dev->data;
 	int ret;
-
-	if (!num_msgs) {
-		return 0;
-	}
 
 	/* Acquire semaphore (block I2C transfer for another thread) */
 	ret = k_sem_take(&data->operation_sem, K_FOREVER);
@@ -544,6 +688,7 @@ static int ifx_cat1_i2c_init(const struct device *dev)
 	struct ifx_cat1_i2c_data *data = dev->data;
 	const struct ifx_cat1_i2c_config *config = dev->config;
 	int ret;
+	cy_rslt_t result;
 
 	/* Configure semaphores */
 	ret = k_sem_init(&data->transfer_sem, 0, 1);
@@ -562,20 +707,18 @@ static int ifx_cat1_i2c_init(const struct device *dev)
 		return ret;
 	}
 
-	/* TODO: Assigns a programmable divider to a selected IP block */
-	/* en_clk_dst_t clk_idx = _ifx_cat1_scb_get_clock_index(_get_hw_block_num(config->base));
-	 * cy_rslt_t result = _ifx_cat1_utils_peri_pclk_assign_divider(clk_idx, &data->clock);
-	 * if (result != CY_RSLT_SUCCESS) {
-	 *	return -ENOTSUP;
-	 * }
-	 */
+	/* Connect this SCB to the peripheral clock */
+	result = ifx_cat1_utils_peri_pclk_assign_divider(config->clk_dst, &data->clock);
+	if (result != CY_RSLT_SUCCESS) {
+		return -EIO;
+	}
 
 	/* Initial value for async operations */
 	data->pending = CAT1_I2C_PENDING_NONE;
 
 	config->irq_config_func(dev);
 
-	return 0;
+	return ifx_cat1_i2c_configure(dev, I2C_MODE_CONTROLLER | I2C_SPEED_SET(I2C_SPEED_STANDARD));
 }
 
 void _i2c_free(const struct device *dev)
@@ -590,6 +733,8 @@ void _i2c_free(const struct device *dev)
 static int ifx_cat1_i2c_target_register(const struct device *dev, struct i2c_target_config *cfg)
 {
 	struct ifx_cat1_i2c_data *data = (struct ifx_cat1_i2c_data *)dev->data;
+	const struct ifx_cat1_i2c_config *const config = dev->config;
+	int ret;
 
 	if (!cfg) {
 		return -EINVAL;
@@ -602,6 +747,14 @@ static int ifx_cat1_i2c_target_register(const struct device *dev, struct i2c_tar
 	data->p_target_config = cfg;
 	data->slave_address = (uint8_t)cfg->address;
 
+	/* Restore pinctrl to SCB mode after unregister released pins */
+	ret = pinctrl_apply_state(config->pcfg, PINCTRL_STATE_DEFAULT);
+	if (ret < 0) {
+		LOG_WRN("target_register: pinctrl DEFAULT state apply failed (%d); "
+			"SCB may not be able to drive SDA/SCL",
+			ret);
+	}
+
 	if (ifx_cat1_i2c_configure(dev, I2C_SPEED_SET(I2C_SPEED_FAST)) != 0) {
 		/* Free I2C resource */
 		_i2c_free(dev);
@@ -611,6 +764,10 @@ static int ifx_cat1_i2c_target_register(const struct device *dev, struct i2c_tar
 		return -EIO;
 	}
 
+	/* Arm the RX buffer so the first write after register is ACKed. */
+	Cy_SCB_I2C_SlaveConfigWriteBuf(config->base, (uint8_t *)data->target_wr_buffer,
+				       CONFIG_I2C_INFINEON_CAT1_TARGET_BUF, &data->context);
+
 	data->irq_cause |= I2C_CAT1_SLAVE_EVENTS_MASK;
 
 	return 0;
@@ -619,6 +776,8 @@ static int ifx_cat1_i2c_target_register(const struct device *dev, struct i2c_tar
 static int ifx_cat1_i2c_target_unregister(const struct device *dev, struct i2c_target_config *cfg)
 {
 	struct ifx_cat1_i2c_data *data = (struct ifx_cat1_i2c_data *)dev->data;
+	const struct ifx_cat1_i2c_config *const config = dev->config;
+	int ret;
 
 	/* Acquire semaphore (block I2C operation for another thread) */
 	k_sem_take(&data->operation_sem, K_FOREVER);
@@ -627,6 +786,15 @@ static int ifx_cat1_i2c_target_unregister(const struct device *dev, struct i2c_t
 	data->p_target_config = NULL;
 
 	data->irq_cause &= ~I2C_CAT1_SLAVE_EVENTS_MASK;
+
+	/* Disable NVIC to prevent ISR loops from stale INTR_S bits. */
+	irq_disable(config->irq_num);
+
+	/* Release pins so a disabled SCB cannot hold the bus low. */
+	ret = pinctrl_apply_state(config->pcfg, PINCTRL_STATE_SLEEP);
+	if (ret < 0 && ret != -ENOENT) {
+		LOG_WRN("target_unregister: pinctrl SLEEP state apply failed (%d)", ret);
+	}
 
 	/* Release semaphore */
 	k_sem_give(&data->operation_sem);
@@ -672,13 +840,108 @@ void ifx_cat1_i2c_cb_wrapper(const struct device *dev, uint32_t event)
 	}
 }
 
+#ifdef CONFIG_I2C_INFINEON_BUS_RECOVERY
+static void ifx_cat1_i2c_bitbang_set_scl(void *io_context, int state)
+{
+	const struct ifx_cat1_i2c_config *config = io_context;
+
+	gpio_pin_set_dt(&config->scl, state);
+}
+
+static void ifx_cat1_i2c_bitbang_set_sda(void *io_context, int state)
+{
+	const struct ifx_cat1_i2c_config *config = io_context;
+
+	gpio_pin_set_dt(&config->sda, state);
+}
+
+static int ifx_cat1_i2c_bitbang_get_sda(void *io_context)
+{
+	const struct ifx_cat1_i2c_config *config = io_context;
+
+	return gpio_pin_get_dt(&config->sda) == 0 ? 0 : 1;
+}
+
+static int ifx_cat1_i2c_recover_bus(const struct device *dev)
+{
+	const struct ifx_cat1_i2c_config *config = dev->config;
+	struct ifx_cat1_i2c_data *data = dev->data;
+	struct i2c_bitbang bitbang_ctx;
+	struct i2c_bitbang_io bitbang_io = {
+		.set_scl = ifx_cat1_i2c_bitbang_set_scl,
+		.set_sda = ifx_cat1_i2c_bitbang_set_sda,
+		.get_sda = ifx_cat1_i2c_bitbang_get_sda,
+	};
+	uint32_t bitrate_cfg;
+	int error = 0;
+
+	if (!gpio_is_ready_dt(&config->scl)) {
+		LOG_ERR("SCL GPIO device not ready");
+		return -EIO;
+	}
+
+	if (!gpio_is_ready_dt(&config->sda)) {
+		LOG_ERR("SDA GPIO device not ready");
+		return -EIO;
+	}
+
+	k_sem_take(&data->operation_sem, K_FOREVER);
+
+	/* Set up the scl and sda pins for the i2c bus */
+	error = gpio_pin_configure_dt(&config->scl, GPIO_OUTPUT | GPIO_OPEN_DRAIN);
+	if (error != 0) {
+		LOG_ERR("failed to configure SCL GPIO (err %d)", error);
+		goto restore;
+	}
+
+	error = gpio_pin_configure_dt(&config->sda, GPIO_OUTPUT | GPIO_OPEN_DRAIN);
+	if (error != 0) {
+		LOG_ERR("failed to configure SDA GPIO (err %d)", error);
+		goto restore;
+	}
+
+	i2c_bitbang_init(&bitbang_ctx, &bitbang_io, (void *)config);
+
+	bitrate_cfg = i2c_map_dt_bitrate(config->master_frequency) | I2C_MODE_CONTROLLER;
+	error = i2c_bitbang_configure(&bitbang_ctx, bitrate_cfg);
+	if (error != 0) {
+		LOG_ERR("failed to configure I2C bitbang (err %d)", error);
+		goto restore;
+	}
+
+	/* Effectively reset the i2c bus via a bus clear procedure.
+	 * This recovers an i2c sda line that is being held low.
+	 * Described in the i2c_bitbang.c file and in section 3.1.16 of
+	 * UM10204 rev. 7 i2c bus specification.
+	 */
+	error = i2c_bitbang_recover_bus(&bitbang_ctx);
+	if (error != 0) {
+		LOG_ERR("failed to recover bus (err %d)", error);
+		goto restore;
+	}
+
+restore:
+
+	/* Restore to a default state.*/
+	(void)pinctrl_apply_state(config->pcfg, PINCTRL_STATE_DEFAULT);
+
+	k_sem_give(&data->operation_sem);
+
+	return error;
+}
+#endif /* CONFIG_I2C_INFINEON_BUS_RECOVERY */
+
 /* I2C API structure */
-static const struct i2c_driver_api i2c_cat1_driver_api = {
+static DEVICE_API(i2c, i2c_cat1_driver_api) = {
 	.configure = ifx_cat1_i2c_configure,
 	.transfer = ifx_cat1_i2c_transfer,
 	.get_config = ifx_cat1_i2c_get_config,
 	.target_register = ifx_cat1_i2c_target_register,
-	.target_unregister = ifx_cat1_i2c_target_unregister};
+	.target_unregister = ifx_cat1_i2c_target_unregister,
+#ifdef CONFIG_I2C_INFINEON_BUS_RECOVERY
+	.recover_bus = ifx_cat1_i2c_recover_bus,
+#endif /* CONFIG_I2C_INFINEON_BUS_RECOVERY */
+};
 
 #if defined(COMPONENT_CAT1B) || defined(COMPONENT_CAT1C) || defined(CONFIG_SOC_FAMILY_INFINEON_EDGE)
 #define PERI_INFO(n) .clock_peri_group = DT_PROP_BY_IDX(DT_INST_PHANDLE(n, clocks), peri_group, 1),
@@ -707,6 +970,14 @@ static const struct i2c_driver_api i2c_cat1_driver_api = {
 	PERI_INFO(n)
 #endif
 
+#ifdef CONFIG_I2C_INFINEON_BUS_RECOVERY
+#define I2C_CAT1_SCL_INIT(n) .scl = GPIO_DT_SPEC_INST_GET_OR(n, scl_gpios, {0}),
+#define I2C_CAT1_SDA_INIT(n) .sda = GPIO_DT_SPEC_INST_GET_OR(n, sda_gpios, {0}),
+#else
+#define I2C_CAT1_SCL_INIT(n)
+#define I2C_CAT1_SDA_INIT(n)
+#endif /* CONFIG_I2C_INFINEON_BUS_RECOVERY */
+
 #define I2C_CAT1_INIT_FUNC(n)                                                                      \
 	static void ifx_cat1_i2c_irq_config_func_##n(const struct device *dev)                     \
 	{                                                                                          \
@@ -731,8 +1002,11 @@ static const struct i2c_driver_api i2c_cat1_driver_api = {
 		.base = (CySCB_Type *)DT_INST_REG_ADDR(n),                                         \
 		.irq_priority = DT_INST_IRQ(n, priority),                                          \
 		.irq_num = DT_INST_IRQN(n),                                                        \
+		.clk_dst = DT_INST_PROP(n, clk_dst),                                               \
 		.irq_config_func = ifx_cat1_i2c_irq_config_func_##n,                               \
 		.i2c_handle_events_func = i2c_handle_events_func_##n,                              \
+		I2C_CAT1_SCL_INIT(n)                                                               \
+		I2C_CAT1_SDA_INIT(n)                                                               \
 	};                                                                                         \
                                                                                                    \
 	static struct ifx_cat1_i2c_data ifx_cat1_i2c_data##n = {                                   \

@@ -125,7 +125,7 @@ extern "C" {
 /** Socket option to select ciphersuites to use. It accepts and returns an array
  *  of integers with IANA assigned ciphersuite identifiers.
  *  If not set, socket will allow all ciphersuites available in the system
- *  (mbedTLS default behavior).
+ *  (Mbed TLS default behavior).
  */
 #define ZSOCK_TLS_CIPHERSUITE_LIST 3
 /** Read-only socket option to read a ciphersuite chosen during TLS handshake.
@@ -135,12 +135,12 @@ extern "C" {
 #define ZSOCK_TLS_CIPHERSUITE_USED 4
 /** Write-only socket option to set peer verification level for TLS connection.
  *  This option accepts an integer with a peer verification level, compatible
- *  with mbedTLS values:
+ *  with Mbed TLS values:
  *    - 0 - none
  *    - 1 - optional
  *    - 2 - required
  *
- *  If not set, socket will use mbedTLS defaults (none for servers, required
+ *  If not set, socket will use Mbed TLS defaults (none for servers, required
  *  for clients).
  */
 #define ZSOCK_TLS_PEER_VERIFY 5
@@ -148,7 +148,7 @@ extern "C" {
  *  is irrelevant for TLS connections, as for them role is selected based on
  *  connect()/listen() usage. By default, DTLS will assume client role.
  *  This option accepts an integer with a TLS role, compatible with
- *  mbedTLS values:
+ *  Mbed TLS values:
  *    - 0 - client
  *    - 1 - server
  */
@@ -171,7 +171,7 @@ extern "C" {
  */
 #define ZSOCK_TLS_DTLS_HANDSHAKE_TIMEOUT_MAX 9
 
-/** Socket option for preventing certificates from being copied to the mbedTLS
+/** Socket option for preventing certificates from being copied to the Mbed TLS
  *  heap if possible. The option is only effective for DER certificates and is
  *  ignored for PEM certificates.
  */
@@ -323,7 +323,7 @@ struct zsock_addrinfo {
 	char *ai_canonname;       /**< Optional official name of the host */
 
 /** @cond INTERNAL_HIDDEN */
-	struct net_sockaddr _ai_addr;
+	struct net_sockaddr_storage _ai_addr;
 	char _ai_canonname[DNS_MAX_NAME_SIZE + 1];
 /** @endcond */
 };
@@ -595,9 +595,10 @@ static inline int zsock_fcntl_wrapper(int sock, int cmd, ...)
  * https://pubs.opengroup.org/onlinepubs/9699919799/functions/ioctl.html
  * for normative description.
  * This function enables querying or manipulating underlying socket parameters.
- * Currently supported @p request values include `ZFD_IOCTL_FIONBIO`, and
- * `ZFD_IOCTL_FIONREAD`, to set non-blocking mode, and query the number of
- * bytes available to read, respectively.
+ * Currently supported @p request values include:
+ *   - @ref ZFD_IOCTL_FIONBIO
+ *   - @ref ZFD_IOCTL_FIONREAD
+ *   - @ref ZFD_IOCTL_FIONWRITE
  * This function is also exposed as `ioctl()`
  * if @kconfig{CONFIG_POSIX_API} is defined (in which case
  * it may conflict with generic POSIX `ioctl()` function).
@@ -843,6 +844,59 @@ int zsock_getnameinfo(const struct net_sockaddr *addr, net_socklen_t addrlen,
 		      char *serv, net_socklen_t servlen, int flags);
 
 /**
+ * @brief Send data to an arbitrary network address. The function will try
+ *        to send all the data requested, blocking if necessary. User can set
+ *        a limit on the time spent in the function using socket send timeout.
+ *
+ * @details
+ * See POSIX.1-2017 article
+ * http://pubs.opengroup.org/onlinepubs/9699919799/functions/sendto.html
+ * for normative description of the parameters. The function differs from
+ * zsock_send() by trying to send all the data requested, blocking
+ * if necessary until all data is sent or timeout occurs.
+ * Note that this is only applicable for stream sockets like TCP.
+ * If the timeout is set to K_NO_WAIT, the function will return after
+ * the first send attempt, possibly sending less data than requested.
+ *
+ * @param sock Socket file descriptor
+ * @param buf Pointer to data buffer to send
+ * @param len Length of data to send
+ * @param flags Socket flags for sending data
+ * @param timeout Maximum time to wait until data is sent
+ * @param sent_len Pointer to variable where to store the actual number of bytes
+ *        sent. Can be set to NULL if the caller does not need this information.
+ * @return 0 on success, -errno on failure
+ */
+int zsock_send_all(int sock, const void *buf, size_t len, int flags,
+		   k_timeout_t timeout, size_t *sent_len);
+
+/**
+ * @brief Send data to an arbitrary network address. The function will try
+ *       to send all the data requested, blocking if necessary. User can set
+ *       a limit on the time spent in the function using socket send timeout.
+ *
+ * @details
+ * See POSIX.1-2017 article
+ * http://pubs.opengroup.org/onlinepubs/9699919799/functions/sendmsg.html
+ * for normative description of the parameters. The function differs from
+ * zsock_sendmsg() by trying to send all the data requested, blocking
+ * if necessary until all data is sent or timeout occurs.
+ * Note that this is only applicable for stream sockets like TCP.
+ * If the timeout is set to K_NO_WAIT, the function will return after
+ * the first send attempt, possibly sending less data than requested.
+ *
+ * @param sock Socket file descriptor
+ * @param msg Pointer to message header describing data to send
+ * @param flags Socket flags for sending data
+ * @param timeout Maximum time to wait until data is sent
+ * @param sent_len Pointer to variable where to store the actual number of bytes
+ *        sent. Can be set to NULL if the caller does not need this information.
+ * @return 0 on success, -errno on failure
+ */
+int zsock_sendmsg_all(int sock, const struct net_msghdr *msg, int flags,
+		      k_timeout_t timeout, size_t *sent_len);
+
+/**
  * @name Socket level options (ZSOCK_SOL_SOCKET)
  * @{
  */
@@ -947,10 +1001,11 @@ int zsock_getnameinfo(const struct net_sockaddr *addr, net_socklen_t addrlen,
 /** @} */
 
 /**
- * @name IPv4 level options (NET_IPPROTO_IP)
+ * @defgroup ipv4_socket_options Socket options for IPv4
+ * @ingroup bsd_sockets
  * @{
  */
-/* Socket options for IPPROTO_IP level */
+/* Socket options for NET_IPPROTO_IP level */
 /** Set or receive the Type-Of-Service value for an outgoing packet. */
 #define ZSOCK_IP_TOS 1
 
@@ -974,6 +1029,18 @@ int zsock_getnameinfo(const struct net_sockaddr *addr, net_socklen_t addrlen,
  */
 #define ZSOCK_IP_MTU 14
 
+/** Disable local IPv4 fragmentation for packets sent on this socket.
+ *
+ *  Takes an integer boolean (0 = allow fragmentation, non-zero = disable).
+ *  When enabled, datagrams larger than the interface MTU are rejected locally
+ *  with errno set to ``EMSGSIZE`` instead of being fragmented. For IPv4 this also
+ *  sets the Don't Fragment (DF) bit in the IP header.
+ *
+ *  Valid for ``setsockopt()`` and ``getsockopt()`` at the ``NET_IPPROTO_IP``
+ *  level.
+ */
+#define ZSOCK_IP_DONTFRAG 15
+
 /** Set IPv4 multicast datagram network interface. */
 #define ZSOCK_IP_MULTICAST_IF 32
 /** Set IPv4 multicast TTL value. */
@@ -991,7 +1058,8 @@ int zsock_getnameinfo(const struct net_sockaddr *addr, net_socklen_t addrlen,
 /** @} */
 
 /**
- * @name IPv6 level options (NET_IPPROTO_IPV6)
+ * @defgroup ipv6_socket_options Socket options for IPv6
+ * @ingroup bsd_sockets
  * @{
  */
 /* Socket options for NET_IPPROTO_IPV6 level */
@@ -1025,6 +1093,17 @@ int zsock_getnameinfo(const struct net_sockaddr *addr, net_socklen_t addrlen,
  * the device MTU or the path MTU when path MTU discovery is enabled.
  */
 #define ZSOCK_IPV6_MTU 24
+
+/** Disable local IPv6 fragmentation for packets sent on this socket.
+ *
+ *  Takes an integer boolean (0 = allow fragmentation, non-zero = disable).
+ *  When enabled, datagrams larger than the interface MTU are rejected locally
+ *  with errno set to ``EMSGSIZE`` instead of being fragmented by the stack.
+ *
+ *  Valid for ``setsockopt()`` and ``getsockopt()`` at the ``NET_IPPROTO_IPV6``
+ *  level.
+ */
+#define ZSOCK_IPV6_DONTFRAG 62
 
 /** Don't support IPv4 access */
 #define ZSOCK_IPV6_V6ONLY 26

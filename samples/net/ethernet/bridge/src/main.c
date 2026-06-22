@@ -31,11 +31,12 @@ static void bridge_find_cb(struct eth_bridge_iface_context *br, void *user_data)
 
 static void bridge_add_iface_cb(struct net_if *iface, void *user_data)
 {
-#if defined(CONFIG_NET_DSA) && !defined(CONFIG_NET_DSA_DEPRECATED)
+#if defined(CONFIG_NET_DSA)
 	struct ethernet_context *eth_ctx;
 #endif
 	struct ud *u = user_data;
 	int i;
+	int ret;
 
 	for (i = 0; i < CONFIG_NET_ETHERNET_BRIDGE_ETH_INTERFACE_COUNT; i++) {
 		if (u->iface[i] == NULL) {
@@ -51,7 +52,7 @@ static void bridge_add_iface_cb(struct net_if *iface, void *user_data)
 		return;
 	}
 
-#if defined(CONFIG_NET_DSA) && !defined(CONFIG_NET_DSA_DEPRECATED)
+#if defined(CONFIG_NET_DSA)
 	eth_ctx = net_if_l2_data(iface);
 
 	if (eth_ctx->dsa_port == DSA_USER_PORT || eth_ctx->dsa_port == NON_DSA_PORT) {
@@ -60,8 +61,12 @@ static void bridge_add_iface_cb(struct net_if *iface, void *user_data)
 #else
 	u->iface[i] = iface;
 #endif
-	eth_bridge_iface_add(u->bridge, iface);
 	LOG_INF("Find iface %d. Add into bridge.", net_if_get_by_iface(iface));
+
+	ret = eth_bridge_iface_add(u->bridge, iface);
+	if (ret < 0) {
+		LOG_ERR("eth_bridge_iface_add failed: %d", ret);
+	}
 }
 
 #if defined(CONFIG_NET_MGMT_EVENT) && defined(CONFIG_NET_DHCPV4)

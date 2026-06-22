@@ -5,7 +5,6 @@
  */
 
 #include <zephyr/kernel.h>
-#include <zephyr/kernel_structs.h>
 
 #include <zephyr/toolchain.h>
 #include <zephyr/linker/sections.h>
@@ -13,9 +12,11 @@
 #include <zephyr/init.h>
 #include <zephyr/sys/check.h>
 #include <zephyr/sys/iterable_sections.h>
+#include <zephyr/sys/minmax.h>
 #include <string.h>
 /* private kernel APIs */
 #include <ksched.h>
+#include <scheduler.h>
 #include <wait_q.h>
 
 #ifdef CONFIG_OBJ_CORE_MEM_SLAB
@@ -104,6 +105,11 @@ static struct k_obj_core_stats_desc mem_slab_stats_desc = {
 static int create_free_list(struct k_mem_slab *slab)
 {
 	char *p;
+	size_t total_size;
+
+	CHECKIF(slab->info.block_size == 0U) {
+		return -EINVAL;
+	}
 
 	/* blocks must be word aligned */
 	CHECKIF(((slab->info.block_size | (uintptr_t)slab->buffer) &
@@ -111,10 +117,17 @@ static int create_free_list(struct k_mem_slab *slab)
 		return -EINVAL;
 	}
 
-	slab->free_list = NULL;
-	p = slab->buffer + slab->info.block_size * (slab->info.num_blocks - 1);
+	if (size_mul_overflow(slab->info.block_size, slab->info.num_blocks, &total_size)) {
+		return -EINVAL;
+	}
+	if (size_add_overflow((size_t)(uintptr_t)slab->buffer, total_size, &total_size)) {
+		return -EINVAL;
+	}
 
-	for (int i = slab->info.num_blocks - 1; i >= 0; i--) {
+	slab->free_list = NULL;
+	p = (char *)(total_size - slab->info.block_size);
+
+	for (uint32_t i = 0; i < slab->info.num_blocks; i++) {
 		*(char **)p = slab->free_list;
 		slab->free_list = p;
 		p -= slab->info.block_size;
@@ -128,7 +141,8 @@ static int create_free_list(struct k_mem_slab *slab)
  *
  * Perform any initialization that wasn't done at build time.
  *
- * @return 0 on success, fails otherwise.
+ * @retval 0 Success.
+ * @retval -EINVAL Slab contains invalid configuration and/or values.
  */
 static int init_mem_slab_obj_core_list(void)
 {
@@ -280,13 +294,8 @@ void k_mem_slab_free(struct k_mem_slab *slab, void *mem)
 
 	SYS_PORT_TRACING_OBJ_FUNC_ENTER(k_mem_slab, free, slab);
 	if (unlikely(slab->free_list == NULL) && IS_ENABLED(CONFIG_MULTITHREADING)) {
-		struct k_thread *pending_thread = z_unpend_first_thread(&slab->wait_q);
-
-		if (unlikely(pending_thread != NULL)) {
+		if (z_sched_wake(&slab->wait_q, 0, mem)) {
 			SYS_PORT_TRACING_OBJ_FUNC_EXIT(k_mem_slab, free, slab);
-
-			z_thread_return_value_set_with_data(pending_thread, 0, mem);
-			z_ready_thread(pending_thread);
 			z_reschedule(&slab->lock, key);
 			return;
 		}

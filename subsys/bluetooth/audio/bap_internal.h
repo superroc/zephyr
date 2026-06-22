@@ -20,24 +20,24 @@
 #include <zephyr/sys/util_macro.h>
 #include <zephyr/types.h>
 
-#define BT_BAP_BASS_SCAN_STATE_NOT_SCANNING   0x00
-#define BT_BAP_BASS_SCAN_STATE_SCANNING       0x01
+#define BT_BAP_BASS_SCAN_STATE_NOT_SCANNING   0x00U
+#define BT_BAP_BASS_SCAN_STATE_SCANNING       0x01U
 
-#define BT_BAP_BASS_OP_SCAN_STOP              0x00
-#define BT_BAP_BASS_OP_SCAN_START             0x01
-#define BT_BAP_BASS_OP_ADD_SRC                0x02
-#define BT_BAP_BASS_OP_MOD_SRC                0x03
-#define BT_BAP_BASS_OP_BROADCAST_CODE         0x04
-#define BT_BAP_BASS_OP_REM_SRC                0x05
+#define BT_BAP_BASS_OP_SCAN_STOP              0x00U
+#define BT_BAP_BASS_OP_SCAN_START             0x01U
+#define BT_BAP_BASS_OP_ADD_SRC                0x02U
+#define BT_BAP_BASS_OP_MOD_SRC                0x03U
+#define BT_BAP_BASS_OP_BROADCAST_CODE         0x04U
+#define BT_BAP_BASS_OP_REM_SRC                0x05U
 
-#define BT_BAP_BASS_SCAN_STATE_IDLE           0x00
-#define BT_BAP_BASS_SCAN_STATE_SCANNING       0x01
-#define BT_BAP_BASS_SCAN_STATE_FAILED         0x02
-#define BT_BAP_BASS_SCAN_STATE_SYNCED         0x03
+#define BT_BAP_BASS_SCAN_STATE_IDLE           0x00U
+#define BT_BAP_BASS_SCAN_STATE_SCANNING       0x01U
+#define BT_BAP_BASS_SCAN_STATE_FAILED         0x02U
+#define BT_BAP_BASS_SCAN_STATE_SYNCED         0x03U
 
-#define BT_BAP_BASS_PA_REQ_NO_SYNC            0x00
-#define BT_BAP_BASS_PA_REQ_SYNC_PAST          0x01
-#define BT_BAP_BASS_PA_REQ_SYNC               0x02
+#define BT_BAP_BASS_PA_REQ_NO_SYNC            0x00U
+#define BT_BAP_BASS_PA_REQ_SYNC_PAST          0x01U
+#define BT_BAP_BASS_PA_REQ_SYNC               0x02U
 
 #define BT_BAP_BASS_VALID_OPCODE(opcode) ((opcode) <= BT_BAP_BASS_OP_REM_SRC)
 
@@ -147,3 +147,5 @@ bool bt_bap_broadcast_sink_has_ep(const struct bt_bap_ep *ep);
 bool bt_bap_broadcast_source_has_ep(const struct bt_bap_ep *ep);
 bool bt_bap_unicast_client_has_ep(const struct bt_bap_ep *ep);
 bool bt_bap_unicast_server_has_ep(const struct bt_bap_ep *ep);
+struct bt_conn *bt_bap_unicast_client_ep_get_conn(const struct bt_bap_ep *ep);
+struct bt_conn *bt_bap_unicast_server_ep_get_conn(const struct bt_bap_ep *ep);

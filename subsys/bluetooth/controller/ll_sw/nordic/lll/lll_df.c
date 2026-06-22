@@ -30,7 +30,6 @@
 #include "lll_df.h"
 #include "lll_df_internal.h"
 
-#include <soc.h>
 #include "hal/debug.h"
 
 /* Minimum number of antenna switch patterns required by Direction Finding Extension to be
@@ -300,7 +299,7 @@ int lll_df_iq_report_no_resources_prepare(struct lll_sync *sync_lll)
 		ull_df_iq_report_alloc();
 
 		/* Store the node in lll_sync object. This is a place where the node may be stored
-		 * until processing afte reception of a PDU to report no IQ data or hand over
+		 * until processing after reception of a PDU to report no IQ data or hand over
 		 * to aux objects for usage in ULL. If there is not enough memory for IQ data
 		 * there is no node to use for temporary storage as it is done for PDUs.
 		 */

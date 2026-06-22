@@ -32,7 +32,7 @@ Zephyr Project Documentation
 
          <p>
            Use the <a href="#" onclick="openVersionSelector(); return false;">version selector</a>
-           for other Zephyr versions.
+           for the documentation of other Zephyr versions.
          </p>
 
 .. only:: development
@@ -44,7 +44,7 @@ Zephyr Project Documentation
 
          <p>
            Use the <a href="#" onclick="openVersionSelector(); return false;">version selector</a>
-           for released versions.
+           for the documentation of previously released versions.
          </p>
 
 .. raw:: html
@@ -59,7 +59,6 @@ Zephyr Project Documentation
    kernel/index.rst
    services/index.rst
    build/index.rst
-   connectivity/index.rst
    hardware/index.rst
    contribute/index.rst
    project/index.rst

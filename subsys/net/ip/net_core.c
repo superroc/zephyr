@@ -26,6 +26,7 @@ LOG_MODULE_REGISTER(net_core, CONFIG_NET_CORE_LOG_LEVEL);
 #include <zephyr/net/conn_mgr_connectivity.h>
 #include <zephyr/net/ipv4_autoconf.h>
 #include <zephyr/net/net_if.h>
+#include <zephyr/net/net_log.h>
 #include <zephyr/net/net_mgmt.h>
 #include <zephyr/net/net_pkt.h>
 #include <zephyr/net/net_core.h>
@@ -33,7 +34,7 @@ LOG_MODULE_REGISTER(net_core, CONFIG_NET_CORE_LOG_LEVEL);
 #include <zephyr/net/gptp.h>
 #include <zephyr/net/websocket.h>
 #include <zephyr/net/ethernet.h>
-#if defined(CONFIG_NET_DSA) && !defined(CONFIG_NET_DSA_DEPRECATED)
+#if defined(CONFIG_NET_DSA)
 #include <zephyr/net/dsa_core.h>
 #endif
 #include <zephyr/net/capture.h>
@@ -56,7 +57,8 @@ LOG_MODULE_REGISTER(net_core, CONFIG_NET_CORE_LOG_LEVEL);
 #include "dhcpv4/dhcpv4_internal.h"
 #include "dhcpv6/dhcpv6_internal.h"
 
-#include "route.h"
+#include "route_ipv4.h"
+#include "route_ipv6.h"
 
 #include "packet_socket.h"
 #include "canbus_socket.h"
@@ -66,6 +68,8 @@ LOG_MODULE_REGISTER(net_core, CONFIG_NET_CORE_LOG_LEVEL);
 #include "tcp_internal.h"
 
 #include "net_stats.h"
+
+#include "../l2/ethernet/arp.h"
 
 #if defined(CONFIG_NET_NATIVE)
 static inline enum net_verdict process_data(struct net_pkt *pkt)
@@ -160,6 +164,9 @@ again:
 /* Things to setup after we are able to RX and TX */
 static void net_post_init(void)
 {
+#if defined(CONFIG_NET_ARP)
+	net_arp_init();
+#endif
 #if defined(CONFIG_NET_LLDP)
 	net_lldp_init();
 #endif
@@ -365,6 +372,8 @@ static inline bool process_multicast(struct net_pkt *pkt)
 }
 #endif
 
+static void net_queue_rx(struct net_if *iface, struct net_pkt *pkt);
+
 int net_try_send_data(struct net_pkt *pkt, k_timeout_t timeout)
 {
 	struct net_if *iface;
@@ -413,7 +422,7 @@ int net_try_send_data(struct net_pkt *pkt, k_timeout_t timeout)
 		NET_DBG("Loopback pkt %p back to us", pkt);
 		net_pkt_set_loopback(pkt, true);
 		net_pkt_set_l2_processed(pkt, true);
-		processing_data(pkt);
+		net_queue_rx(net_pkt_iface(pkt), pkt);
 		ret = 0;
 		goto err;
 	}
@@ -489,7 +498,6 @@ static void net_rx(struct net_if *iface, struct net_pkt *pkt)
 	NET_DBG("Received pkt %p len %zu", pkt, pkt_len);
 
 	net_stats_update_bytes_recv(iface, pkt_len);
-	conn_mgr_if_used(iface);
 
 	if (IS_ENABLED(CONFIG_NET_LOOPBACK)) {
 #ifdef CONFIG_NET_L2_DUMMY
@@ -547,7 +555,7 @@ drop:
 int net_recv_data(struct net_if *iface, struct net_pkt *pkt)
 {
 	int ret;
-#if defined(CONFIG_NET_DSA) && !defined(CONFIG_NET_DSA_DEPRECATED)
+#if defined(CONFIG_NET_DSA)
 	struct ethernet_context *eth_ctx = net_if_l2_data(iface);
 
 	/* DSA driver handles first to untag and to redirect to user interface. */
@@ -579,7 +587,7 @@ int net_recv_data(struct net_if *iface, struct net_pkt *pkt)
 	NET_DBG("prio %d iface %p pkt %p len %zu", net_pkt_priority(pkt),
 		iface, pkt, net_pkt_get_len(pkt));
 
-	if (IS_ENABLED(CONFIG_NET_ROUTING)) {
+	if (IS_ENABLED(CONFIG_NET_PKT_ORIG_IFACE)) {
 		net_pkt_set_orig_iface(pkt, iface);
 	}
 
@@ -622,7 +630,8 @@ static inline void l3_init(void)
 
 	net_tcp_init();
 
-	net_route_init();
+	net_route_ipv4_init();
+	net_route_ipv6_init();
 
 	NET_DBG("Network L3 init done");
 }
@@ -686,6 +695,8 @@ static inline int services_init(void)
 	websocket_init();
 
 	net_coap_init();
+
+	net_quic_init();
 
 	net_shell_init();
 

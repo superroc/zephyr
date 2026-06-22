@@ -43,7 +43,6 @@ static K_THREAD_STACK_DEFINE(iface_wq_stack, CONFIG_WIFI_NM_WPA_SUPPLICANT_WQ_ST
 #include "wpa_supplicant/config.h"
 #include "wpa_supplicant_i.h"
 #include "fst/fst.h"
-#include "includes.h"
 #include "wpa_cli_zephyr.h"
 #include "ctrl_iface_zephyr.h"
 #ifdef CONFIG_WIFI_NM_HOSTAPD_AP
@@ -96,11 +95,17 @@ static const struct wifi_mgmt_ops mgmt_ops = {
 #ifdef CONFIG_WIFI_NM_WPA_SUPPLICANT_DPP
 	.dpp_dispatch = supplicant_dpp_dispatch,
 #endif /* CONFIG_WIFI_NM_WPA_SUPPLICANT_DPP */
+#ifdef CONFIG_WIFI_NM_WPA_SUPPLICANT_NAN
+	.nan_cfg = supplicant_nan_cfg,
+#endif /* CONFIG_WIFI_NM_WPA_SUPPLICANT_NAN */
 	.pmksa_flush = supplicant_pmksa_flush,
 #ifdef CONFIG_WIFI_NM_WPA_SUPPLICANT_CRYPTO_ENTERPRISE
 	.enterprise_creds = supplicant_add_enterprise_creds,
 #endif
 	.config_params = supplicant_config_params,
+#ifdef CONFIG_WIFI_NM_WPA_SUPPLICANT_P2P
+	.p2p_oper = supplicant_p2p_oper,
+#endif
 };
 
 DEFINE_WIFI_NM_INSTANCE(wifi_supplicant, &mgmt_ops);
@@ -245,7 +250,45 @@ static void zephyr_wpa_supplicant_msg(void *ctx, const char *txt, size_t len)
 		supplicant_send_wifi_mgmt_event(wpa_s->ifname,
 						NET_EVENT_WIFI_CMD_NEIGHBOR_REP_RECEIVED,
 						(void *)txt, len);
+#ifdef CONFIG_WIFI_NM_WPA_SUPPLICANT_P2P
+	} else if (strncmp(txt, "P2P-", 4) == 0) {
+		supplicant_send_wifi_mgmt_event(wpa_s->ifname,
+						NET_EVENT_WIFI_CMD_SUPPLICANT,
+						(void *)txt, len);
+#endif
 	}
+#ifdef CONFIG_WIFI_NM_WPA_SUPPLICANT_NAN
+	else if (strncmp(txt, "NAN-DISCOVERY-RESULT", 20) == 0) {
+		/* NAN discovery result (subscriber found publisher) */
+		supplicant_send_wifi_mgmt_event(wpa_s->ifname,
+			NET_EVENT_WIFI_CMD_NAN_DISCOVERY_RESULT,
+			(void *)txt, len);
+	} else if (strncmp(txt, "NAN-REPLIED", 11) == 0) {
+		/* NAN replied (publisher received subscribe request) */
+		supplicant_send_wifi_mgmt_event(wpa_s->ifname,
+			NET_EVENT_WIFI_CMD_NAN_REPLIED,
+			(void *)txt, len);
+	} else if (strncmp(txt, "NAN-PUBLISH-TERMINATED", 22) == 0) {
+		/* NAN publish terminated */
+		supplicant_send_wifi_mgmt_event(wpa_s->ifname,
+			NET_EVENT_WIFI_CMD_NAN_PUBLISH_TERMINATED,
+			(void *)txt, len);
+	} else if (strncmp(txt, "NAN-SUBSCRIBE-TERMINATED", 24) == 0) {
+		/* NAN subscribe terminated */
+		supplicant_send_wifi_mgmt_event(wpa_s->ifname,
+			NET_EVENT_WIFI_CMD_NAN_SUBSCRIBE_TERMINATED,
+			(void *)txt, len);
+	} else if (strncmp(txt, "NAN-RECEIVE", 11) == 0) {
+		/* NAN follow-up received event */
+		supplicant_send_wifi_mgmt_event(wpa_s->ifname,
+			NET_EVENT_WIFI_CMD_NAN_RECEIVE,
+			(void *)txt, len);
+	} else {
+		/* Unhandled NAN message */
+		wpa_printf(MSG_DEBUG, "Unhandled NAN event: %.*s",
+			(int)len, txt);
+	}
+#endif /* CONFIG_WIFI_NM_WPA_SUPPLICANT_NAN */
 }
 
 static const char *zephyr_hostap_msg_ifname_cb(void *ctx)

@@ -150,10 +150,6 @@ static int renesas_ra_sci_i2c_transfer(const struct device *dev, struct i2c_msg 
 	struct i2c_msg tmp_msg;
 	uint16_t tmp_len;
 
-	if (!num_msgs) {
-		return 0;
-	}
-
 	/* Handle i2c burst write, restructure message to be compatible with HAL*/
 	if (num_msgs == 2) {
 		if (msgs[0].len == 1U && !(msgs[0].flags & I2C_MSG_READ) &&
@@ -602,7 +598,7 @@ static void calc_sci_iic_clock_setting(const struct device *dev, const uint32_t 
 	clk_cfg->cycles_value = (uint8_t)sda_delay_counts;
 }
 
-static const struct i2c_driver_api renesas_ra_sci_i2c_driver_api = {
+static DEVICE_API(i2c, renesas_ra_sci_i2c_driver_api) = {
 	.configure = renesas_ra_sci_i2c_configure,
 	.get_config = renesas_ra_sci_i2c_get_config,
 	.transfer = renesas_ra_sci_i2c_transfer,

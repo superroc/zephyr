@@ -114,12 +114,12 @@ config FUSE_FS_ACCESS
 choice FUSE_LIBRARY_VERSION
 	prompt "Host FUSE library version"
 	depends on FUSE_FS_ACCESS
-	default FUSE_LIBRARY_V2
+	default FUSE_LIBRARY_V3
 
 config FUSE_LIBRARY_V2
 	bool "Use libfuse(2)"
 	help
-	  Use v2 of the host FUSE library.
+	  Use v2 of the host FUSE library. This may not be available in newer distributions.
 
 config FUSE_LIBRARY_V3
 	bool "Use libfuse3"
@@ -127,6 +127,20 @@ config FUSE_LIBRARY_V3
 	  Use the host fuse3 library. This may not be available in older distributions.
 
 endchoice
+
+config FILE_SYSTEM_NATIVE_MOUNT
+	bool "Mount Native Simulator host FS to Zephyr"
+	depends on ARCH_POSIX
+	select NATIVE_USE_NSI_FCNTL
+	help
+	  Mount a path in the host file system in Zephyr. This allows Zephyr to access, and modify,
+	  host files and folders, like any other embedded mount point.
+
+	  Pass to the executable in the command line:
+
+	    -volume=/host/dir:/dir
+
+	  to mount host system /host/dir be mounted in Zephyr in /dir.
 
 endif # FILE_SYSTEM
 
@@ -154,7 +168,5 @@ rsource "virtiofs/Kconfig"
 endif # FILE_SYSTEM_LIB_LINK
 
 rsource "fcb/Kconfig"
-rsource "nvs/Kconfig"
-rsource "zms/Kconfig"
 
 endmenu

@@ -8,6 +8,9 @@ toolchain:
 flash: 256
 ram: 24
 supported:
+  - adc
   - flash
   - gpio
+  - hwinfo
   - uart
+  - watchdog

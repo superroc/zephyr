@@ -6,6 +6,7 @@
 # Copyright (c) 2024 Arm Limited (or its affiliates). All rights reserved.
 #
 # SPDX-License-Identifier: Apache-2.0
+from __future__ import annotations
 
 import argparse
 import contextlib
@@ -21,24 +22,25 @@ import subprocess
 import sys
 import threading
 import time
-from contextlib import contextmanager
 from enum import Enum
 from pathlib import Path
 from queue import Empty, Queue
+from typing import TYPE_CHECKING
 
 import psutil
-from serial.tools import list_ports
-from twisterlib.environment import ZEPHYR_BASE, strip_ansi_sequences
-from twisterlib.error import TwisterException
-from twisterlib.hardwaremap import DUT
+from domains import Domains
+from twisterlib import ZEPHYR_BASE
+from twisterlib.environment import strip_ansi_sequences
+from twisterlib.hardwaredata import CompoundHardwareData
 from twisterlib.platform import Platform
 from twisterlib.statuses import TwisterStatus
 
-sys.path.insert(0, os.path.join(ZEPHYR_BASE, "scripts/pylib/build_helpers"))
-from domains import Domains
+if TYPE_CHECKING:
+    from twisterlib.testinstance import TestInstance
 
 try:
     import serial
+    from serial.tools import list_ports
 except ImportError:
     print("Install pyserial python module with pip to use --device-testing option.")
 
@@ -79,7 +81,7 @@ class Handler:
         CRASH = "Crash"
         FLASH = "Flash Error"
         NONE = "None"
-    def __init__(self, instance, type_str: str, options: argparse.Namespace,
+    def __init__(self, instance: TestInstance, type_str: str, options: argparse.Namespace,
                  generator_cmd: str | None = None, suite_name_check: bool = True):
         """Constructor
 
@@ -107,7 +109,6 @@ class Handler:
 
         self.args = []
         self.terminated = False
-        self.duts: list[DUT] = []
 
     def get_test_timeout(self):
         return math.ceil(self.instance.testsuite.timeout *
@@ -306,18 +307,38 @@ class BinaryHandler(Handler):
             uart = ""
             # os.path.join cannot be used on a Mock object, so we are
             # explicitly checking the type
-            if isinstance(self.instance.platform, Platform):
-                for board_dir in self.options.board_root:
-                    path = os.path.join(Path(board_dir).parent, self.instance.platform.resc)
-                    if os.path.exists(path):
-                        resc = path
-                        break
-                uart = self.instance.platform.uart
-                command = ["renode-test",
-                            "--variable", "KEYWORDS:" + keywords,
-                            "--variable", "ELF:@" + elf,
-                            "--variable", "RESC:@" + resc,
-                            "--variable", "UART:" + uart]
+            plat = self.instance.platform
+            if isinstance(plat, Platform):
+                if plat.resc:
+                    for board_dir in self.options.board_root:
+                        path = os.path.join(Path(board_dir).parent, plat.resc)
+                        if os.path.exists(path):
+                            resc = path
+                            break
+                uart = plat.uart
+                sim = plat.simulator_by_name(None)
+                if resc:
+                    # Renode-based robot test (existing behavior)
+                    command = ["renode-test",
+                                "--variable", "KEYWORDS:" + keywords,
+                                "--variable", "ELF:@" + elf,
+                                "--variable", "RESC:@" + resc,
+                                "--variable", "UART:" + uart]
+                elif sim.name in ['native']:
+                    # native_sim support
+                    binary = os.path.join(self.build_dir, "zephyr", "zephyr.exe")
+                    robot_dir = os.path.join(ZEPHYR_BASE, 'tests', 'robot')
+                    native_keywords = os.path.join(robot_dir, 'common_native.robot')
+                    command = ["robot",
+                               "--pythonpath", robot_dir,
+                               "--outputdir", self.build_dir,
+                               "--variable", "KEYWORDS:" + native_keywords,
+                               "--variable", "ELF:@" + elf,
+                               "--variable", "BINARY:" + binary,
+                               "--variable", "BUILD_DIR:" + self.build_dir]
+                else:
+                    raise ValueError(f"Unsupported platform for robot test: {plat.name}")
+
         elif self.call_make_run:
             if self.options.sim_name:
                 target = f"run_{self.options.sim_name}"
@@ -363,7 +384,7 @@ class BinaryHandler(Handler):
         return env
 
     def handle(self, harness):
-        robot_test = getattr(harness, "is_robot_test", False)
+        robot_test = getattr(harness, "is_robot_test", False) is True
 
         command = self._create_command(robot_test)
 
@@ -453,7 +474,7 @@ class DeviceHandler(Handler):
         # Clear serial leftover.
         ser.reset_input_buffer()
 
-        with open(self.log, "wb") as log_out_fp:
+        with open(self.log, "w", encoding="utf-8") as log_out_fp:
             while ser.isOpen():
                 if halt_event.is_set():
                     logger.debug('halted')
@@ -488,8 +509,8 @@ class DeviceHandler(Handler):
                 # is available yet.
                 if serial_line:
                     # can be more lines in serial_line so split them before handling
-                    for sl in serial_line.decode('utf-8', 'ignore').splitlines(keepends=True):
-                        log_out_fp.write(strip_ansi_sequences(sl).encode('utf-8'))
+                    for sl in serial_line.decode('utf-8', 'replace').splitlines(keepends=True):
+                        log_out_fp.write(strip_ansi_sequences(sl))
                         log_out_fp.flush()
                         if sl := sl.strip():
                             logger.debug(f"DEVICE: {sl}")
@@ -498,61 +519,6 @@ class DeviceHandler(Handler):
                 if harness.status != TwisterStatus.NONE and not harness.capture_coverage:
                     ser.close()
                     break
-
-    @staticmethod
-    @contextmanager
-    def acquire_dut_locks(duts):
-        try:
-            for d in duts:
-                d.lock.acquire()
-            yield
-        finally:
-            for d in duts:
-                d.lock.release()
-
-    def device_is_available(self, instance) -> DUT | None:
-        device = instance.platform.name
-        fixture = instance.testsuite.harness_config.get("fixture")
-        duts_found: list[DUT] = []
-
-        for d in self.duts:
-            if fixture and fixture not in map(lambda f: f.split(sep=':')[0], d.fixtures):
-                continue
-            if d.platform != device or (d.serial is None and d.serial_pty is None):
-                continue
-            duts_found.append(d)
-
-        if not duts_found:
-            raise TwisterException(f"No device to serve as {device} platform.")
-
-        # Select an available DUT with less failures
-        for d in sorted(duts_found, key=lambda _dut: _dut.failures):
-            # get all DUTs with the same id
-            duts_shared_hw = [_d for _d in self.duts if _d.id == d.id]
-            with self.acquire_dut_locks(duts_shared_hw):
-                avail = False
-                if d.available:
-                    for _d in duts_shared_hw:
-                        _d.available = 0
-                    d.counter_increment()
-                    avail = True
-                    logger.debug(f"Retain DUT:{d.platform}, Id:{d.id}, "
-                                f"counter:{d.counter}, failures:{d.failures}")
-            if avail:
-                return d
-
-        return None
-
-    def make_dut_available(self, dut: DUT) -> None:
-        if self.instance.status in [TwisterStatus.ERROR, TwisterStatus.FAIL]:
-            dut.failures_increment()
-        logger.debug(f"Release DUT:{dut.platform}, Id:{dut.id}, "
-                     f"counter:{dut.counter}, failures:{dut.failures}")
-        # get all DUTs with the same id
-        duts_shared_hw = [_d for _d in self.duts if _d.id == dut.id]
-        with self.acquire_dut_locks(duts_shared_hw):
-            for _d in duts_shared_hw:
-                _d.available = 1
 
     @staticmethod
     def run_custom_script(script, timeout):
@@ -587,10 +553,14 @@ class DeviceHandler(Handler):
             return self._create_flash_command(hardware)
 
         command = ["west"]
+        command_extra_args = []
         if self.options.verbose > 2:
             command.append(f"-{'v' * (self.options.verbose - 2)}")
-        command += ["flash", "--no-rebuild", "-d", self.build_dir]
-        command_extra_args = []
+
+        west_flash_cmd = self.options.west_flash_cmd or hardware.west_flash_cmd or "flash"
+        if west_flash_cmd == "debug":
+            command_extra_args.append('--batch')
+        command.extend([west_flash_cmd, "--no-rebuild", "-d", self.build_dir])
 
         # There are three ways this option is used.
         # 1) bare: default flags
@@ -609,7 +579,7 @@ class DeviceHandler(Handler):
             board_id = hardware.probe_id or hardware.id
             product = hardware.product
             if board_id is not None:
-                if runner in ("pyocd", "nrfjprog", "nrfutil", "nrfutil_next"):
+                if runner in ("pyocd", "nrfjprog", "nrfutil", "nrfutil_next", "spsdk"):
                     command_extra_args.append("--dev-id")
                     command_extra_args.append(board_id)
                 elif runner == "esp32":
@@ -662,7 +632,7 @@ class DeviceHandler(Handler):
             logger.debug(f"Terminated serial-pty:'{ser_pty}'")
     #
 
-    def _create_serial_connection(self, dut, serial_device, hardware_baud,
+    def _create_serial_connection(self, serial_device, hardware_baud,
                                   flash_timeout, serial_pty, ser_pty_process):
         try:
             ser = serial.Serial(
@@ -675,13 +645,12 @@ class DeviceHandler(Handler):
                 timeout=max(flash_timeout, self.get_test_timeout())
             )
         except serial.SerialException as e:
-            self._handle_serial_exception(e, dut, serial_pty, ser_pty_process)
+            self._handle_serial_exception(e, serial_pty, ser_pty_process)
             raise
 
         return ser
 
-
-    def _handle_serial_exception(self, exception, dut, serial_pty, ser_pty_process):
+    def _handle_serial_exception(self, exception, serial_pty, ser_pty_process):
         self.instance.status = TwisterStatus.FAIL
         self.instance.reason = "Serial Device Error"
         logger.error(f"Serial device error: {exception!s}")
@@ -689,33 +658,6 @@ class DeviceHandler(Handler):
         self.instance.add_missing_case_status(TwisterStatus.BLOCK, "Serial Device Error")
         if serial_pty and ser_pty_process:
             self._terminate_pty(serial_pty, ser_pty_process)
-
-        self.make_dut_available(dut)
-
-    def get_more_serials_from_device(self, hardware: DUT) -> list[str]:
-        serials = set()
-        dut_shared_hw = [_d for _d in self.duts if _d.id == hardware.id]
-        for d in dut_shared_hw:
-            if d.serial and d.serial != hardware.serial:
-                serials.add(d.serial)
-        return list(serials)
-
-    def get_hardware(self) -> DUT | None:
-        hardware = None
-        try:
-            hardware = self.device_is_available(self.instance)
-            in_waiting = 0
-            while not hardware:
-                time.sleep(1)
-                in_waiting += 1
-                if in_waiting % 60 == 0:
-                    logger.debug(f"Waiting for a DUT to run {self.instance.name}")
-                hardware = self.device_is_available(self.instance)
-        except TwisterException as error:
-            self.instance.status = TwisterStatus.FAIL
-            self.instance.reason = str(error)
-            logger.error(self.instance.reason)
-        return hardware
 
     def _start_serial_pty(self, serial_pty, serial_pty_master):
         ser_pty_process = None
@@ -738,13 +680,68 @@ class DeviceHandler(Handler):
 
         return ser_pty_process
 
+    def _handle_robot_test(self, harness, hardware, command, serial_device, serial_pty,
+                            post_flash_script, post_script, script_param, flash_timeout):
+        """Flash device and run Robot Framework test directly without serial monitoring."""
+        start_time = time.time()
+        d_log = f"{self.instance.build_dir}/device.log"
+        logger.debug(f'Flash command: {command}')
+        failure_type = Handler.FailureType.NONE
+        stderr = b""
+
+        try:
+            with subprocess.Popen(
+                command, stderr=subprocess.PIPE, stdout=subprocess.PIPE
+            ) as proc:
+                try:
+                    stdout, stderr = proc.communicate(timeout=flash_timeout)
+                    logger.debug(stdout.decode(errors="ignore"))
+                    if proc.returncode != 0:
+                        self.instance.status = TwisterStatus.ERROR
+                        self.instance.reason = "Device issue (Flash error?)"
+                        failure_type = Handler.FailureType.FLASH
+                        with open(d_log, "w") as dlog_fp:
+                            dlog_fp.write(stderr.decode())
+                except subprocess.TimeoutExpired:
+                    logger.warning("Flash operation timed out.")
+                    self.terminate(proc)
+                    proc.communicate()
+                    self.instance.status = TwisterStatus.ERROR
+                    self.instance.reason = "Device issue (Flash timeout)"
+                    failure_type = Handler.FailureType.FLASH
+        except subprocess.CalledProcessError:
+            self.instance.status = TwisterStatus.ERROR
+            self.instance.reason = "Device issue (Flash error)"
+            failure_type = Handler.FailureType.FLASH
+
+        if stderr:
+            with open(d_log, "w") as dlog_fp:
+                dlog_fp.write(stderr.decode())
+
+        if post_flash_script:
+            timeout = 30
+            if script_param:
+                timeout = script_param.get("post_flash_timeout", timeout)
+            self.run_custom_script(post_flash_script, timeout)
+
+        self.execution_time = time.time() - start_time
+
+        if failure_type == Handler.FailureType.NONE:
+            robot_command = ["robot",
+                             "--variable", f"SERIAL:{serial_device}",
+                             "--variable", f"BAUD:{hardware.serial_baud}",
+                             "--variable", f"BUILD_DIR:{self.build_dir}"]
+            harness.run_robot_test(robot_command, self)
+
+        if post_script:
+            timeout = 30
+            if script_param:
+                timeout = script_param.get("post_script_timeout", timeout)
+            self.run_custom_script(post_script, timeout)
+
     def handle(self, harness):
-        runner = None
-        hardware = self.get_hardware()
-        if hardware:
-            self.instance.dut = hardware.id
-        else:
-            return
+        robot_test = getattr(harness, "is_robot_test", False) is True
+        hardware: CompoundHardwareData = self.instance.reserved_duts[0]
 
         # Run pre-script BEFORE starting serial PTY to avoid conflicts
         pre_script = hardware.pre_script
@@ -765,7 +762,7 @@ class DeviceHandler(Handler):
             ser_pty_master, slave = pty.openpty()
             serial_device = os.ttyname(slave)
 
-        logger.debug(f"Using serial device {serial_device} @ {hardware.baud} baud")
+        logger.debug(f"Using serial device {serial_device} @ {hardware.serial_baud} baud")
 
         command = self._create_command(runner, hardware)
 
@@ -776,6 +773,15 @@ class DeviceHandler(Handler):
         if hardware.flash_with_test:
             flash_timeout += self.get_test_timeout()
 
+        if robot_test:
+            # For robot tests: flash the device, then hand off to Robot Framework
+            # directly. Robot Framework will open the serial port itself.
+            self._handle_robot_test(
+                harness, hardware, command, serial_device, serial_pty,
+                post_flash_script, post_script, script_param, flash_timeout
+            )
+            return
+
         serial_port = None
         ser_pty_process = None
         if hardware.flash_before is False:
@@ -785,9 +791,8 @@ class DeviceHandler(Handler):
 
         try:
             ser = self._create_serial_connection(
-                hardware,
                 serial_port,
-                hardware.baud,
+                hardware.serial_baud,
                 flash_timeout,
                 serial_pty,
                 ser_pty_process
@@ -846,13 +851,14 @@ class DeviceHandler(Handler):
         # Connect to device after flashing it
         if hardware.flash_before:
             try:
-                if serial_pty:
-                    ser_pty_process = self._start_serial_pty(serial_pty, ser_pty_master)
-                logger.debug(f"Attach serial device {serial_device} @ {hardware.baud} baud")
+                logger.debug(f"Attach serial device {serial_device} @ {hardware.serial_baud} baud")
                 ser.port = serial_device
 
-                # Apply ESP32-specific RTS/DTR reset logic
-                if runner == "esp32":
+                if serial_pty:
+                    ser_pty_process = self._start_serial_pty(serial_pty, ser_pty_master)
+                    ser.open()
+                elif runner == "esp32":
+                    # Apply ESP32-specific RTS/DTR reset logic
                     logger.debug("Applying ESP32 RTS/DTR reset sequence")
 
                     # Prepare: IO0=HIGH (DTR=True), EN=HIGH (RTS=False)
@@ -864,7 +870,7 @@ class DeviceHandler(Handler):
                     # Reset pulse: IO0=LOW (DTR=False), EN=LOW (RTS=True)
                     ser.dtr = False
                     ser.rts = True
-                    time.sleep(0.01)
+                    time.sleep(0.1)
 
                     # Return to normal boot
                     ser.rts = False
@@ -882,7 +888,7 @@ class DeviceHandler(Handler):
                     ser.open()
 
             except serial.SerialException as e:
-                self._handle_serial_exception(e, hardware, serial_pty, ser_pty_process)
+                self._handle_serial_exception(e, serial_pty, ser_pty_process)
                 return
 
         if failure_type != Handler.FailureType.FLASH:
@@ -918,8 +924,6 @@ class DeviceHandler(Handler):
             if script_param:
                 timeout = script_param.get("post_script_timeout", timeout)
             self.run_custom_script(post_script, timeout)
-
-        self.make_dut_available(hardware)
 
 
 class QEMUHandler(Handler):
@@ -1138,9 +1142,28 @@ class QEMUHandler(Handler):
         return command
 
     def handle(self, harness):
-        self.run = True
+        robot_test = getattr(harness, "is_robot_test", False) is True
 
         domain_build_dir = self.get_default_domain_build_dir()
+
+        if robot_test:
+            # Robot Framework manages QEMU startup via QemuSimLibrary.
+            # QEMU_PIPE is already baked into the build as <build_dir>/qemu-fifo,
+            # so the library only needs BUILD_DIR and GENERATOR_CMD to start QEMU.
+            robot_dir = os.path.join(ZEPHYR_BASE, 'tests', 'robot')
+            qemu_keywords = os.path.join(robot_dir, 'common_qemu.robot')
+            robot_command = [
+                "robot",
+                "--pythonpath", robot_dir,
+                "--outputdir", self.build_dir,
+                "--variable", "KEYWORDS:" + qemu_keywords,
+                "--variable", "BUILD_DIR:" + domain_build_dir,
+                "--variable", "GENERATOR_CMD:" + (self.generator_cmd or "cmake"),
+            ]
+            harness.run_robot_test(robot_command, self)
+            return
+
+        self.run = True
 
         command = self._create_command(domain_build_dir)
 
@@ -1200,9 +1223,15 @@ class QEMUHandler(Handler):
                 logger.debug("Timed out while monitoring QEMU output")
 
             if os.path.exists(self.pid_fn):
-                with open(self.pid_fn) as pid_file:
-                    qemu_pid = int(pid_file.read())
-                os.unlink(self.pid_fn)
+                try:
+                    with open(self.pid_fn) as pid_file:
+                        qemu_pid = int(pid_file.read())
+                    os.unlink(self.pid_fn)
+                except FileNotFoundError:
+                    # QEMU may have exited and removed its own pid file
+                    # between the existence check above and the unlink
+                    # here. Don't let that crash the whole pipeline.
+                    pass
 
         logger.debug(f"return code from QEMU ({qemu_pid}): {self.returncode}")
 

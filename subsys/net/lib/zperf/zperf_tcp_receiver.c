@@ -13,6 +13,7 @@ LOG_MODULE_DECLARE(net_zperf, CONFIG_NET_ZPERF_LOG_LEVEL);
 #include <zephyr/linker/sections.h>
 #include <zephyr/toolchain.h>
 
+#include <zephyr/net/net_log.h>
 #include <zephyr/net/socket.h>
 #include <zephyr/net/socket_service.h>
 #include <zephyr/net/zperf.h>
@@ -27,8 +28,6 @@ LOG_MODULE_DECLARE(net_zperf, CONFIG_NET_ZPERF_LOG_LEVEL);
 #define SOCK_ID_IPV4_LISTEN 0
 #define SOCK_ID_IPV6_LISTEN 1
 #define SOCK_ID_MAX         (CONFIG_NET_ZPERF_MAX_SESSIONS + 2)
-
-#define TCP_RECEIVER_BUF_SIZE 1500
 
 static zperf_callback tcp_session_cb;
 static void *tcp_user_data;
@@ -123,7 +122,7 @@ static void tcp_receiver_cleanup(void)
 
 static int tcp_recv_data(struct net_socket_service_event *pev)
 {
-	static uint8_t buf[TCP_RECEIVER_BUF_SIZE];
+	static uint8_t buf[CONFIG_NET_ZPERF_TCP_RECEIVER_BUF_SIZE];
 	int i, ret = 0;
 	int family, sock, sock_error;
 	struct net_sockaddr addr_incoming_conn;
@@ -136,10 +135,10 @@ static int tcp_recv_data(struct net_socket_service_event *pev)
 
 	if ((pev->event.revents & ZSOCK_POLLERR) ||
 	    (pev->event.revents & ZSOCK_POLLNVAL)) {
-		(void)zsock_getsockopt(pev->event.fd, SOL_SOCKET,
-				       SO_DOMAIN, &family, &optlen);
-		(void)zsock_getsockopt(pev->event.fd, SOL_SOCKET,
-				       SO_ERROR, &sock_error, &optlen);
+		(void)zsock_getsockopt(pev->event.fd, ZSOCK_SOL_SOCKET,
+				       ZSOCK_SO_DOMAIN, &family, &optlen);
+		(void)zsock_getsockopt(pev->event.fd, ZSOCK_SOL_SOCKET,
+				       ZSOCK_SO_ERROR, &sock_error, &optlen);
 		NET_ERR("TCP receiver IPv%d socket error (%d)",
 			family == NET_AF_INET ? 4 : 6, sock_error);
 		ret = -sock_error;
@@ -161,8 +160,8 @@ static int tcp_recv_data(struct net_socket_service_event *pev)
 				    &addrlen);
 		if (sock < 0) {
 			ret = -errno;
-			(void)zsock_getsockopt(pev->event.fd, SOL_SOCKET,
-					       SO_DOMAIN, &family, &optlen);
+			(void)zsock_getsockopt(pev->event.fd, ZSOCK_SOL_SOCKET,
+					       ZSOCK_SO_DOMAIN, &family, &optlen);
 			NET_ERR("TCP receiver IPv%d accept error (%d)",
 				family == NET_AF_INET ? 4 : 6, ret);
 			goto error;
@@ -191,8 +190,8 @@ static int tcp_recv_data(struct net_socket_service_event *pev)
 	} else {
 		ret = zsock_recv(pev->event.fd, buf, sizeof(buf), 0);
 		if (ret < 0) {
-			(void)zsock_getsockopt(pev->event.fd, SOL_SOCKET,
-					       SO_DOMAIN, &family, &optlen);
+			(void)zsock_getsockopt(pev->event.fd, ZSOCK_SOL_SOCKET,
+					       ZSOCK_SO_DOMAIN, &family, &optlen);
 			NET_ERR("recv failed on IPv%d socket (%d)",
 				family == NET_AF_INET ? 4 : 6,
 				errno);

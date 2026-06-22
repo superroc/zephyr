@@ -143,6 +143,8 @@ These describe connections to cameras and displays (strictly speaking not shield
 - :dtcompatible:`nxp,cam-44pins-connector`
 - :dtcompatible:`nxp,parallel-lcd-connector`
 - :dtcompatible:`raspberrypi,csi-connector`
+- :dtcompatible:`st,dsi-lcd-qsh-030-connector`
+- :dtcompatible:`st,dvp-cam-zif-30-connector`
 - :dtcompatible:`weact,dcmi-camera-connector`
 
 
@@ -184,8 +186,8 @@ See :dtcompatible:`microbit,edge-connector` for GPIO pin definitions and
 links to technical requirements.
 
 
-mikroBUS |trade|
-----------------
+mikroBUS™
+---------
 
 This is an interface standard for add-on boards, developed by Mikroe.
 
@@ -194,7 +196,7 @@ This is an interface standard for add-on boards, developed by Mikroe.
    :alt: 3D Hall 3 Click
    :height: 300px
 
-   3D Hall 3 Click, an example of a mikroBUS |trade| shield
+   3D Hall 3 Click, an example of a mikroBUS™ shield
 
 Relevant devicetree node labels:
 
@@ -205,7 +207,7 @@ Relevant devicetree node labels:
 - ``mikrobus_spi``
 - ``mikrobus_serial``
 
-Note that boards with several mikroBUS |trade| connectors might define for
+Note that boards with several mikroBUS™ connectors might define for
 example ``mikrobus_2_spi``.
 
 
@@ -224,6 +226,9 @@ This is the form factor of the Raspberry Pi Pico boards.
 Relevant devicetree node labels:
 
 - ``pico_header`` See :dtcompatible:`raspberrypi,pico-header` for GPIO pin definitions.
+- ``pico_i2c`` A node label that refers to the same node as either the node label
+  ``pico_i2c0`` or ``pico_i2c1``. It references the node that should be used with
+  priority or as default.
 - ``pico_i2c0``
 - ``pico_i2c1``
 - ``pico_serial``

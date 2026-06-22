@@ -22,21 +22,7 @@ Hardware
 Supported Features
 ==================
 
-The following hardware features are supported:
-
-+-----------------------+------------+----------------------+
-| Interface             | Controller | Driver/Component     |
-+=======================+============+======================+
-| GICv3                 | on-chip    | interrupt controller |
-+-----------------------+------------+----------------------+
-| PL011 UART            | on-chip    | serial port          |
-+-----------------------+------------+----------------------+
-| ARM GENERIC TIMER     | on-chip    | system clock         |
-+-----------------------+------------+----------------------+
-| SMSC_91C111           | on-chip    | ethernet device      |
-+-----------------------+------------+----------------------+
-
-The kernel currently does not support other hardware features on this platform.
+.. zephyr:board-supported-hw::
 
 Board Variants
 ==============
@@ -50,6 +36,7 @@ The following board targets are available:
 * ``fvp_base_revc_2xaem/v9a/smp`` - ARMv9-A SMP (4 cores)
 * ``fvp_base_revc_2xaem/v9a/smp/ns`` - ARMv9-A SMP Non-Secure
 * ``fvp_base_revc_2xaem/a320`` - ARMv9.2-A with Cortex-A320 configuration
+* ``fvp_base_revc_2xaem/v8a_aarch32`` - ARMv8-A AArch32 with Cortex-A32 cores
 
 **Cortex-A320 Variant:**
 
@@ -124,6 +111,14 @@ For Cortex-A320 variants:
    :board: fvp_base_revc_2xaem/a320
    :goals: build
 
+For the ARMv8-A AArch32 variant:
+
+.. zephyr-app-commands::
+   :zephyr-app: samples/hello_world
+   :host-os: unix
+   :board: fvp_base_revc_2xaem/v8a_aarch32
+   :goals: build
+
 For SMP variants:
 
 .. zephyr-app-commands::
@@ -183,4 +178,4 @@ References
 **********
 
 - `Arm Architecture Reference Manual - Armv8 <https://developer.arm.com/documentation/ddi0487/latest>`_
-- `Fixed Virtual Platforms <https://developer.arm.com/tools-and-software/simulation-models/fixed-virtual-platforms>`_
+- `Fixed Virtual Platforms <https://developer.arm.com/Tools%20and%20Software/Fixed%20Virtual%20Platforms/Arm%20Architecture%20FVPs>`_

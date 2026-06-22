@@ -436,7 +436,7 @@ static void msc_process_read(struct msc_bot_ctx *ctx)
 		ctx->scsi_bytes = 0;
 	}
 
-	/* Fill SCSI Data IN buffer if there is avaialble buffer and data */
+	/* Fill SCSI Data IN buffer if there is available buffer and data */
 	while ((ctx->num_in_queued < MSC_NUM_BUFFERS) &&
 	       (ctx->state == MSC_BBB_PROCESS_READ) &&
 	       (len = msc_next_in_transfer_length(ctx->class_node))) {
@@ -708,19 +708,10 @@ static void usbd_msc_handle_request(struct usbd_class_data *c_data,
 ep_request_error:
 	if (bi->ep == msc_get_bulk_out(c_data)) {
 		ctx->num_out_queued--;
-		if (buf->frags) {
-			ctx->num_out_queued--;
-		}
 	} else if (bi->ep == msc_get_bulk_in(c_data)) {
 		ctx->num_in_queued--;
-		if (buf->frags) {
-			ctx->num_in_queued--;
-		}
 	}
 	msc_free_scsi_buf(ctx, buf->__buf);
-	if (buf->frags) {
-		msc_free_scsi_buf(ctx, buf->frags->__buf);
-	}
 	usbd_ep_buf_free(uds_ctx, buf);
 }
 

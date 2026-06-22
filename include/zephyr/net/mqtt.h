@@ -570,7 +570,7 @@ struct mqtt_publish_param {
 /** @brief Parameters for subscribe/unsubscribe message. */
 struct mqtt_subscription_list {
 	/** Array containing topics along with QoS for each. */
-	struct mqtt_topic *list;
+	const struct mqtt_topic *list;
 
 	/** Number of topics in the subscription list */
 	uint16_t list_count;
@@ -768,6 +768,9 @@ struct mqtt_sec_config {
 
 	/** Indicates the preference for copying certificates to the heap. */
 	int cert_nocopy;
+
+	/** Set socket to use native TLS (used with socket offloading). */
+	bool set_native_tls;
 };
 
 /** @brief MQTT transport type. */

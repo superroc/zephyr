@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2019, Linaro Limited.
- * Copyright 2024 NXP
+ * Copyright 2024-2025 NXP
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -27,7 +27,7 @@ struct mcux_gpt_config {
 
 	const struct device *clock_dev;
 	clock_control_subsys_t clock_subsys;
-	clock_name_t clock_source;
+	bool enable_free_run;
 	void (*irq_config_func)(void);
 };
 
@@ -178,6 +178,51 @@ static uint32_t mcux_gpt_get_top_value(const struct device *dev)
 	return config->info.max_top_value;
 }
 
+static int mcux_gpt_reset(const struct device *dev)
+{
+	GPT_Type *base = get_base(dev);
+	bool was_free_run = (base->CR & GPT_CR_FRR_MASK) != 0;
+	uint32_t saved_ir;
+	bool of1_before;
+
+	if (was_free_run) {
+		/* Snapshot the OF1 state. */
+		of1_before = (GPT_GetStatusFlags(base, kGPT_OutputCompare1Flag) != 0U);
+		/* Save and disable all GPT interrupts to guard against
+		 * a spurious OCR1 match during the Restart mode window.
+		 */
+		saved_ir = base->IR;
+		base->IR = 0U;
+		/* Switch to Restart mode (FRR=0) to enable the OCR1
+		 * write-reset mechanism.
+		 */
+		base->CR &= ~GPT_CR_FRR_MASK;
+	}
+
+	/* The GPT hardware resets CNT to 0 on any write to OCR1
+	 * when operating in Restart mode.
+	 */
+	base->OCR[0] = base->OCR[0];
+
+	if (was_free_run) {
+		/* Restore Free-Run mode. */
+		base->CR |= GPT_CR_FRR_MASK;
+
+		/* If OF1 was not set before but is set now, clear it
+		 * so it does not fire as a false alarm when IR is restored.
+		 */
+		if (!of1_before &&
+		    (GPT_GetStatusFlags(base, kGPT_OutputCompare1Flag) != 0U)) {
+			GPT_ClearStatusFlags(base, kGPT_OutputCompare1Flag);
+		}
+
+		/* Restore interrupts. */
+		base->IR = saved_ir;
+	}
+
+	return 0;
+}
+
 static int mcux_gpt_init(const struct device *dev)
 {
 	const struct mcux_gpt_config *config = dev->config;
@@ -205,7 +250,7 @@ static int mcux_gpt_init(const struct device *dev)
 	}
 
 	GPT_GetDefaultConfig(&gptConfig);
-	gptConfig.enableFreeRun = true; /* Do not reset on compare */
+	gptConfig.enableFreeRun = config->enable_free_run;
 	gptConfig.clockSource = kGPT_ClockSource_Periph;
 	gptConfig.divider = clock_freq / config->info.freq;
 	base = get_base(dev);
@@ -225,6 +270,7 @@ static DEVICE_API(counter, mcux_gpt_driver_api) = {
 	.set_top_value = mcux_gpt_set_top_value,
 	.get_pending_int = mcux_gpt_get_pending_int,
 	.get_top_value = mcux_gpt_get_top_value,
+	.reset = mcux_gpt_reset,
 };
 
 #define GPT_DEVICE_INIT_MCUX(n)						\
@@ -236,6 +282,7 @@ static DEVICE_API(counter, mcux_gpt_driver_api) = {
 		.clock_dev = DEVICE_DT_GET(DT_INST_CLOCKS_CTLR(n)),	\
 		.clock_subsys =						\
 			(clock_control_subsys_t)DT_INST_CLOCKS_CELL(n, name),\
+		.enable_free_run = (DT_INST_ENUM_IDX_OR(n, run_mode, 0) == 1),\
 		.info = {						\
 			.max_top_value = UINT32_MAX,			\
 			.freq = DT_INST_PROP(n, gptfreq),           \

@@ -1,7 +1,7 @@
-/* obex.h - IrDA Oject Exchange Protocol handling */
+/* obex.h - IrDA Object Exchange Protocol handling */
 
 /*
- * Copyright 2024-2025 NXP
+ * Copyright 2024-2026 NXP
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -10,8 +10,8 @@
 #define ZEPHYR_INCLUDE_BLUETOOTH_OBEX_H_
 
 /**
- * @brief IrDA Oject Exchange Protocol (OBEX)
- * @defgroup bt_obex IrDA Oject Exchange Protocol (OBEX)
+ * @brief IrDA Object Exchange Protocol (OBEX)
+ * @defgroup bt_obex IrDA Object Exchange Protocol (OBEX)
  * @ingroup bluetooth
  * @{
  */
@@ -310,7 +310,7 @@ struct bt_obex_server_ops {
 	 *  received.
 	 *
 	 *  @param server The OBEX server object.
-	 *  @param flags The flags.
+	 *  @param flags The flags @ref bt_obex_setpath_flags.
 	 *  @param buf Optional headers.
 	 */
 	void (*setpath)(struct bt_obex_server *server, uint8_t flags, struct net_buf *buf);
@@ -599,6 +599,9 @@ struct bt_obex {
 	/** @internal OBEX executing client */
 	atomic_ptr_t _active_client;
 
+	/** @internal OBEX last executed client */
+	atomic_ptr_t _last_client;
+
 	/** @internal OBEX executing client */
 	atomic_ptr_t _active_server;
 
@@ -644,7 +647,7 @@ int bt_obex_server_unregister(struct bt_obex_server *server);
  *  The connect operation initiates the connection and sets up the basic expectations of each side
  *  of the link. The connect request must fit in a single packet.
  *  The third parameter `buf` saves the packet data (sequence of headers) of the connect request is
- *  stored in thrid parameter `buf`. All headers are packed by calling function
+ *  stored in third parameter `buf`. All headers are packed by calling function
  *  bt_obex_add_header_*. Such as header `Authenticate Challenge` is packed by calling
  *  @ref bt_obex_add_header_auth_challenge.
  *  The OBEX object of the client should be set before calling the function.
@@ -671,7 +674,7 @@ int bt_obex_connect(struct bt_obex_client *client, uint16_t mopl, struct net_buf
  *  The second parameter `rsp_code` is used to pass the response code @ref bt_obex_rsp_code. The
  *  typical values @ref BT_OBEX_RSP_CODE_SUCCESS for `success`.
  *  The 4th parameter `buf` saves the packet data (sequence of headers) of the connect response is
- *  stored in thrid parameter `buf`. All headers are packed by calling function
+ *  stored in third parameter `buf`. All headers are packed by calling function
  *  bt_obex_add_header_*. Such as header `Authenticate Response` is packed by calling
  *  @ref bt_obex_add_header_auth_rsp.
  *
@@ -737,7 +740,7 @@ int bt_obex_disconnect_rsp(struct bt_obex_server *server, uint8_t rsp_code, stru
  *  The put operation consists of one or more request packets, the last of which should have the
  *  second parameter `final` set.
  *  The third parameter `buf` saves the packet data (sequence of headers) of the put request is
- *  stored in thrid parameter `buf`. All headers are packed by calling function
+ *  stored in third parameter `buf`. All headers are packed by calling function
  *  bt_obex_add_header_*. Such as header `Name` is packed by calling @ref bt_obex_add_header_name.
  *
  *  @note A put operation with NO Body or End-of-Body headers whatsoever should be treated as a
@@ -765,7 +768,7 @@ int bt_obex_put(struct bt_obex_client *client, bool final, struct net_buf *buf);
  *  typical values, @ref BT_OBEX_RSP_CODE_CONTINUE for `continue`, @ref BT_OBEX_RSP_CODE_SUCCESS
  *  for `success`.
  *  The third parameter `buf` saves the packet data (sequence of headers) of the put response is
- *  stored in thrid parameter `buf`. All headers are packed by calling function
+ *  stored in third parameter `buf`. All headers are packed by calling function
  *  bt_obex_add_header_*. Such as header `srm` is packed by calling @ref bt_obex_add_header_srm.
  *  Or, the `buf` could be NULL if there is not any data needs to be sent.
  *
@@ -788,7 +791,7 @@ int bt_obex_put_rsp(struct bt_obex_server *server, uint8_t rsp_code, struct net_
  *  is sent with the final bit, all subsequent get request packets must set the final bit until
  *  the operation is complete.
  *  The third parameter `buf` saves the packet data (sequence of headers) of the get request is
- *  stored in thrid parameter `buf`. All headers are packed by calling function
+ *  stored in third parameter `buf`. All headers are packed by calling function
  *  bt_obex_add_header_*. Such as header `Name` is packed by calling @ref bt_obex_add_header_name.
  *  Or, the `buf` could be NULL if there is not any data needs to be sent.
  *
@@ -824,7 +827,7 @@ int bt_obex_get(struct bt_obex_client *client, bool final, struct net_buf *buf);
  *  couldn’t understand request`, @ref BT_OBEX_RSP_CODE_FORBIDDEN for `Forbidden - operation is
  *  understood but refused`.
  *  The third parameter `buf` saves the packet data (sequence of headers) of the get response is
- *  stored in thrid parameter `buf`. All headers are packed by calling function
+ *  stored in third parameter `buf`. All headers are packed by calling function
  *  bt_obex_add_header_*. Such as header `srm` is packed by calling @ref bt_obex_add_header_srm.
  *  Or, the `buf` could be NULL if there is not any data needs to be sent.
  *
@@ -845,7 +848,7 @@ int bt_obex_get_rsp(struct bt_obex_server *server, uint8_t rsp_code, struct net_
  *  as put) before it would be normally end. The abort request always fits in one OBEX packet and
  *  have the Final bit set.
  *  The second parameter `buf` saves the packet data (sequence of headers) of the abort request is
- *  stored in thrid parameter `buf`. All headers are packed by calling function
+ *  stored in third parameter `buf`. All headers are packed by calling function
  *  bt_obex_add_header_*. Such as header `description` is packed by calling
  *  @ref bt_obex_add_header_description. Or, the `buf` could be NULL if there is not any data
  *  needs to be sent.
@@ -869,7 +872,7 @@ int bt_obex_abort(struct bt_obex_client *client, struct net_buf *buf);
  *  The second parameter `rsp_code` is used to pass the response code @ref bt_obex_rsp_code. The
  *  typical value @ref BT_OBEX_RSP_CODE_SUCCESS for `success`.
  *  The third parameter `buf` saves the packet data (sequence of headers) of the abort response is
- *  stored in thrid parameter `buf`. All headers are packed by calling function
+ *  stored in third parameter `buf`. All headers are packed by calling function
  *  bt_obex_add_header_*. Or, the `buf` could be NULL if there is not any data needs to be sent.
  *
  *  @note Buffer ownership is transferred to the stack in case of success, in case of an error
@@ -883,6 +886,14 @@ int bt_obex_abort(struct bt_obex_client *client, struct net_buf *buf);
  */
 int bt_obex_abort_rsp(struct bt_obex_server *server, uint8_t rsp_code, struct net_buf *buf);
 
+/** @brief OBEX SetPath operation flags. */
+enum __packed bt_obex_setpath_flags {
+	/** Backup a level before applying name (equivalent to ../ on many systems). */
+	BT_OBEX_SETPATH_FLAG_BACKUP = BIT(0U),
+	/** Don't create folder if it does not exist, return an error instead. */
+	BT_OBEX_SETPATH_FLAG_NO_CREATE = BIT(1U),
+};
+
 /** @brief OBEX setpath request
  *
  *  The setpath request is used to set the "current folder" on the receiving side in order to
@@ -895,7 +906,7 @@ int bt_obex_abort_rsp(struct bt_obex_server *server, uint8_t rsp_code, struct ne
  *  folder if it does not exist, return an error instead.` Other bits must be set to zero by
  *  sender and ignored by receiver.
  *  The third parameter `buf` saves the packet data (sequence of headers) of the setpath request is
- *  stored in thrid parameter `buf`. All headers are packed by calling function
+ *  stored in third parameter `buf`. All headers are packed by calling function
  *  bt_obex_add_header_*. Such as header `Name` is packed by calling @ref bt_obex_add_header_name.
  *  If the header `Name` is added, it means the client wants to go one level down relative to the
  *  current folder into the folder `name`. Or, the client wants to go back to the default folder
@@ -909,7 +920,7 @@ int bt_obex_abort_rsp(struct bt_obex_server *server, uint8_t rsp_code, struct ne
  *  the caller retains the ownership of the buffer.
  *
  *  @param client OBEX client object.
- *  @param flags Flags for setpath request.
+ *  @param flags Flags for setpath request @ref bt_obex_setpath_flags.
  *  @param buf Sequence of headers to be sent out.
  *
  *  @return 0 in case of success or negative value in case of error.
@@ -928,7 +939,7 @@ int bt_obex_setpath(struct bt_obex_client *client, uint8_t flags, struct net_buf
  *  @ref BT_OBEX_RSP_CODE_BAD_REQ for `Bad request - server couldn’t understand request`,
  *  @ref BT_OBEX_RSP_CODE_FORBIDDEN for `Forbidden - operation is understood but refused`.
  *  The third parameter `buf` saves the packet data (sequence of headers) of the setpath response
- *  is stored in thrid parameter `buf`. All headers are packed by calling function
+ *  is stored in third parameter `buf`. All headers are packed by calling function
  *  bt_obex_add_header_*. Or, the `buf` could be NULL if there is not any data needs to be sent.
  *
  *  @note Buffer ownership is transferred to the stack in case of success, in case of an error
@@ -979,7 +990,7 @@ enum __packed bt_obex_action_id {
  *  The action operation consists of one or more request packets, the last of which should have
  *  the second parameter `final` set.
  *  The third parameter `buf` saves the packet data (sequence of headers) of the action request is
- *  stored in thrid parameter `buf`. All headers are packed by calling function
+ *  stored in third parameter `buf`. All headers are packed by calling function
  *  bt_obex_add_header_*. Such as header `Name` is packed by calling @ref bt_obex_add_header_name.
  *
  *  @note Buffer ownership is transferred to the stack in case of success, in case of an error
@@ -1034,7 +1045,7 @@ int bt_obex_action(struct bt_obex_client *client, bool final, struct net_buf *bu
  *  Set Object Permissions Action busy`.
  *
  *  The third parameter `buf` saves the packet data (sequence of headers) of the action response
- *  is stored in thrid parameter `buf`. All headers are packed by calling function
+ *  is stored in third parameter `buf`. All headers are packed by calling function
  *  bt_obex_add_header_*. Or, the `buf` could be NULL if there is not any data needs to be sent.
  *
  *  @note Buffer ownership is transferred to the stack in case of success, in case of an error
@@ -1177,8 +1188,14 @@ static inline int bt_obex_add_header_body_or_end_body(struct net_buf *buf, uint1
 	uint16_t tx_len;
 	int err;
 
-	if ((buf == NULL) || (body == NULL) || (added_len == NULL) || (mopl < BT_OBEX_MIN_MTU) ||
-	    (len == 0)) {
+	/*
+	 * OBEX Version 1.5, section 2.2.9 Body, End-of-Body
+	 * The `body` could be a NULL, so the `len` of the name could 0.
+	 * In some cases, the object body data is generated on the fly and the end cannot
+	 * be anticipated, so it is legal to send a zero length End-of-Body header.
+	 */
+	if ((buf == NULL) || ((len != 0) && (body == NULL)) || (added_len == NULL) ||
+	    (mopl < BT_OBEX_MIN_MTU)) {
 		return -EINVAL;
 	}
 
@@ -1255,12 +1272,16 @@ int bt_obex_add_header_app_param(struct net_buf *buf, size_t count,
  * String of bytes representing the nonce.
  */
 #define BT_OBEX_CHALLENGE_TAG_NONCE 0x00
+/** OBEX digest-challenge nonce length (16 bytes) */
+#define BT_OBEX_CHALLENGE_TAG_NONCE_LEN 16
 
 /**
  * OBEX digest-challenge tag: Options
  * Optional Challenge Information.
  */
 #define BT_OBEX_CHALLENGE_TAG_OPTIONS 0x01
+/** OBEX digest-challenge options length (1 byte) */
+#define BT_OBEX_CHALLENGE_TAG_OPTIONS_LEN 1
 
 /** Option BIT0: When set, the User Id must be sent in the authenticate response. */
 #define BT_OBEX_CHALLENGE_TAG_OPTION_REQ_USER_ID BIT(0)
@@ -1291,6 +1312,8 @@ int bt_obex_add_header_auth_challenge(struct net_buf *buf, size_t count,
  * String of bytes representing the request digest.
  */
 #define BT_OBEX_RESPONSE_TAG_REQ_DIGEST 0x00
+/** OBEX digest-response request-digest length (16 bytes) */
+#define BT_OBEX_RESPONSE_TAG_REQ_DIGEST_LEN 16
 
 /**
  * OBEX digest-Response tag: User Id
@@ -1303,6 +1326,8 @@ int bt_obex_add_header_auth_challenge(struct net_buf *buf, size_t count,
  * The nonce sent in the digest challenge string.
  */
 #define BT_OBEX_RESPONSE_TAG_NONCE 0x02
+/** OBEX digest-response nonce length (16 bytes) */
+#define BT_OBEX_RESPONSE_TAG_NONCE_LEN 16
 
 /** @brief Add Header: authentication digest-response.
  *
@@ -1643,7 +1668,7 @@ int bt_obex_get_header_wan_uuid(struct net_buf *buf, uint16_t *len, const uint8_
 /** @brief Get header value: oBEX Object class of object.
  *
  *  @param buf Buffer needs to be sent.
- *  @param len Length of oject class.
+ *  @param len Length of object class.
  *  @param obj_class Class of object.
  *
  *  @return 0 in case of success or negative value in case of error.
@@ -1744,6 +1769,15 @@ bool bt_obex_string_is_valid(uint8_t id, uint16_t len, const uint8_t *str);
  *  @return true if the header is found or false otherwise.
  */
 bool bt_obex_has_header(struct net_buf *buf, uint8_t id);
+
+/** @brief Check whether the buf has the specified application parameter
+ *
+ *  @param buf Buffer needs to be sent.
+ *  @param id The tag id of the application parameter.
+ *
+ *  @return true if the tag is found or false otherwise.
+ */
+bool bt_obex_has_app_param(struct net_buf *buf, uint8_t id);
 
 #ifdef __cplusplus
 }

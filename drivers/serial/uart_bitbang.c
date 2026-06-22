@@ -187,7 +187,7 @@ static void uart_bitbang_rx_counter_top_interrupt(const struct device *dev, void
 
 #ifdef CONFIG_UART_INTERRUPT_DRIVEN
 				if ((data->user_cb) && (data->irq & UART_BITBANG_IRQ_PE)) {
-					data->user_cb(dev, data->user_data);
+					data->user_cb(uart_dev, data->user_data);
 				}
 #endif /* CONFIG_UART_INTERRUPT_DRIVEN */
 
@@ -200,7 +200,7 @@ static void uart_bitbang_rx_counter_top_interrupt(const struct device *dev, void
 
 #ifdef CONFIG_UART_INTERRUPT_DRIVEN
 		if ((data->user_cb) && (data->irq & UART_BITBANG_IRQ_RXNE)) {
-			data->user_cb(dev, data->user_data);
+			data->user_cb(uart_dev, data->user_data);
 		}
 #endif /* CONFIG_UART_INTERRUPT_DRIVEN */
 	}
@@ -287,7 +287,7 @@ static void uart_bitbang_tx_counter_top_interrupt(const struct device *dev, void
 			}
 #ifdef CONFIG_UART_INTERRUPT_DRIVEN
 			if ((data->user_cb) && (data->irq & UART_BITBANG_IRQ_TC)) {
-				data->user_cb(dev, data->user_data);
+				data->user_cb(uart_dev, data->user_data);
 			}
 #endif /* CONFIG_UART_INTERRUPT_DRIVEN */
 		}
@@ -551,11 +551,6 @@ static int uart_bitbang_irq_is_pending(const struct device *dev)
 	return 0;
 }
 
-static int uart_bitbang_irq_update(const struct device *dev)
-{
-	return 1;
-}
-
 static void uart_bitbang_irq_callback_set(const struct device *dev,
 					  uart_irq_callback_user_data_t cb, void *cb_data)
 {
@@ -598,7 +593,6 @@ static DEVICE_API(uart, uart_bitbang_api) = {
 	.irq_err_enable = uart_bitbang_irq_err_enable,
 	.irq_err_disable = uart_bitbang_irq_err_disable,
 	.irq_is_pending = uart_bitbang_irq_is_pending,
-	.irq_update = uart_bitbang_irq_update,
 	.irq_callback_set = uart_bitbang_irq_callback_set,
 #endif /* CONFIG_UART_INTERRUPT_DRIVEN */
 };

@@ -871,15 +871,17 @@ static void bt_ag_notify_work(struct k_work *work)
 
 	bt_ag_tx_free(tx);
 
+	state = ag->state;
+
 	if (err < 0) {
-		state = ag->state;
 		if ((state != BT_HFP_DISCONNECTED) && (state != BT_HFP_DISCONNECTING)) {
 			bt_hfp_ag_set_state(ag, BT_HFP_DISCONNECTING);
 			bt_rfcomm_dlc_disconnect(&ag->rfcomm_dlc);
 		}
 	}
 
-	if (cb != NULL) {
+	/* If the AG connection has been disconnected, ignore the callback of tx node. */
+	if ((state != BT_HFP_DISCONNECTED) && (cb != NULL)) {
 		cb(ag, user_data);
 	}
 
@@ -1599,6 +1601,24 @@ static int hfp_ag_open_sco(struct bt_hfp_ag *ag, struct bt_hfp_ag_call *call)
 	return 0;
 }
 
+static void bt_hfp_ag_auto_select_codec(struct bt_hfp_ag *ag)
+{
+	uint32_t supported_codec;
+
+	supported_codec = BT_HFP_AG_SUPPORTED_CODEC_IDS & ag->hf_codec_ids;
+
+	/* Automatically select the best available codec */
+	if (supported_codec == 0) {
+		LOG_WRN("No supported Codec. Selected Codec CVSD as default");
+		ag->selected_codec_id = BT_HFP_AG_CODEC_CVSD;
+
+		return;
+	}
+
+	ag->selected_codec_id = find_msb_set(supported_codec) - 1;
+	LOG_DBG("Selected codec ID: %u", ag->selected_codec_id);
+}
+
 static int bt_hfp_ag_codec_select(struct bt_hfp_ag *ag)
 {
 	int err;
@@ -1607,8 +1627,8 @@ static int bt_hfp_ag_codec_select(struct bt_hfp_ag *ag)
 
 	hfp_ag_lock(ag);
 	if (ag->selected_codec_id == 0) {
-		LOG_WRN("Codec is invalid, set default value");
-		ag->selected_codec_id = BT_HFP_AG_CODEC_CVSD;
+		bt_hfp_ag_auto_select_codec(ag);
+		LOG_WRN("Codec is invalid, selected codec ID: %u", ag->selected_codec_id);
 	}
 
 	if (!(ag->hf_codec_ids & BIT(ag->selected_codec_id))) {
@@ -1734,7 +1754,7 @@ static void bt_hfp_ag_set_in_band_ring(struct bt_hfp_ag *ag)
 {
 	bool is_inband_ringtone;
 
-	is_inband_ringtone = AG_SUPT_FEAT(ag, BT_HFP_AG_FEATURE_INBAND_RINGTONE) ? true : false;
+	is_inband_ringtone = AG_SUPT_FEAT(ag, BT_HFP_AG_FEATURE_INBAND_RINGTONE_ENABLE);
 
 	if (is_inband_ringtone && !atomic_test_bit(ag->flags, BT_HFP_AG_INBAND_RING)) {
 		int err = hfp_ag_send_data(ag, NULL, NULL, "\r\n+BSIR:1\r\n");
@@ -3743,10 +3763,11 @@ static void hfp_ag_recv(struct bt_rfcomm_dlc *dlc, struct net_buf *buf)
 		if (strlen(cmd_handlers[index].cmd) > len) {
 			continue;
 		}
-		if (strncmp((char *)data, cmd_handlers[index].cmd,
-				 strlen(cmd_handlers[index].cmd)) != 0) {
+
+		if (memcmp(data, cmd_handlers[index].cmd, strlen(cmd_handlers[index].cmd)) != 0) {
 			continue;
 		}
+
 		if (NULL != cmd_handlers[index].handler) {
 			(void)net_buf_pull(buf, strlen(cmd_handlers[index].cmd));
 			err = cmd_handlers[index].handler(ag, buf);
@@ -5147,7 +5168,7 @@ int bt_hfp_ag_audio_connect(struct bt_hfp_ag *ag, uint8_t id)
 	}
 
 	if (atomic_ptr_get(&ag->sco_conn) != NULL) {
-		LOG_ERR("Audio conenction has been connected");
+		LOG_ERR("Audio connection has been connected");
 		hfp_ag_unlock(ag);
 		return -ECONNREFUSED;
 	}
@@ -5245,6 +5266,11 @@ int bt_hfp_ag_inband_ringtone(struct bt_hfp_ag *ag, bool inband)
 
 	LOG_DBG("");
 
+	if (!IS_ENABLED(CONFIG_BT_HFP_AG_INBAND_RINGTONE)) {
+		LOG_ERR("In-band ring tone is unsupported!");
+		return -ENOTSUP;
+	}
+
 	if (ag == NULL) {
 		return -EINVAL;
 	}
@@ -5285,6 +5311,13 @@ int bt_hfp_ag_voice_recognition(struct bt_hfp_ag *ag, bool activate)
 		return -ENOTCONN;
 	}
 	hfp_ag_unlock(ag);
+
+	feature = BOTH_SUPT_FEAT(ag, BT_HFP_HF_FEATURE_VOICE_RECG,
+				 BT_HFP_AG_FEATURE_VOICE_RECG);
+	if (!feature) {
+		LOG_WRN("VR feature is unsupported");
+		return -ENOTSUP;
+	}
 
 	if (activate && atomic_test_bit(ag->flags, BT_HFP_AG_VRE_ACTIVATE)) {
 		LOG_WRN("VR has been activated");

@@ -27,9 +27,9 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/__assert.h>
 #include <zephyr/sys/atomic.h>
-#include <zephyr/sys/check.h>
 #include <zephyr/sys/slist.h>
 #include <zephyr/sys/util.h>
+#include <zephyr/toolchain.h>
 #include <zephyr/types.h>
 
 #include "common/bt_str.h"
@@ -103,6 +103,8 @@ static uint8_t mute_notify_handler(struct bt_conn *conn, struct bt_gatt_subscrib
 	uint8_t *mute_val;
 	struct bt_micp_mic_ctlr *mic_ctlr;
 
+	ARG_UNUSED(params);
+
 	if (conn == NULL) {
 		return BT_GATT_ITER_CONTINUE;
 	}
@@ -128,7 +130,9 @@ static uint8_t micp_mic_ctlr_read_mute_cb(struct bt_conn *conn, uint8_t err,
 {
 	struct bt_micp_mic_ctlr *mic_ctlr = mic_ctlr_get_by_conn(conn);
 	uint8_t cb_err = err;
-	uint8_t mute_val = 0;
+	uint8_t mute_val = 0U;
+
+	ARG_UNUSED(params);
 
 	atomic_clear_bit(mic_ctlr->flags, BT_MICP_MIC_CTLR_FLAG_BUSY);
 
@@ -154,6 +158,8 @@ static void micp_mic_ctlr_write_mics_mute_cb(struct bt_conn *conn, uint8_t err,
 {
 	struct bt_micp_mic_ctlr *mic_ctlr = mic_ctlr_get_by_conn(conn);
 	uint8_t mute_val = mic_ctlr->mute_val_buf[0];
+
+	ARG_UNUSED(params);
 
 	LOG_DBG("Write %s (0x%02X)", err ? "failed" : "successful", err);
 
@@ -242,7 +248,6 @@ static void micp_mic_ctlr_aics_discover_cb(struct bt_aics *inst, int err)
 
 	if (mic_ctlr == NULL) {
 		LOG_ERR("Could not lookup mic_ctlr from aics");
-		micp_mic_ctlr_discover_complete(mic_ctlr, BT_GATT_ERR(BT_ATT_ERR_UNLIKELY));
 
 		return;
 	}
@@ -492,24 +497,21 @@ static uint8_t primary_discover_func(struct bt_conn *conn,
 
 static void micp_mic_ctlr_reset(struct bt_micp_mic_ctlr *mic_ctlr)
 {
-	mic_ctlr->start_handle = 0;
-	mic_ctlr->end_handle = 0;
-	mic_ctlr->mute_handle = 0;
+	mic_ctlr->start_handle = 0U;
+	mic_ctlr->end_handle = 0U;
+	mic_ctlr->mute_handle = 0U;
 #if defined(CONFIG_BT_MICP_MIC_CTLR_AICS)
-	mic_ctlr->aics_inst_cnt = 0;
+	mic_ctlr->aics_inst_cnt = 0U;
 #endif /* CONFIG_BT_MICP_MIC_CTLR_AICS */
 
-	if (mic_ctlr->conn != NULL) {
-		struct bt_conn *conn = mic_ctlr->conn;
-
-		bt_conn_unref(conn);
-		mic_ctlr->conn = NULL;
-	}
+	bt_conn_drop(&mic_ctlr->conn);
 }
 
 static void disconnected(struct bt_conn *conn, uint8_t reason)
 {
 	struct bt_micp_mic_ctlr *mic_ctlr = mic_ctlr_get_by_conn(conn);
+
+	ARG_UNUSED(reason);
 
 	if (mic_ctlr->conn == conn) {
 		micp_mic_ctlr_reset(mic_ctlr);
@@ -535,7 +537,7 @@ int bt_micp_mic_ctlr_discover(struct bt_conn *conn, struct bt_micp_mic_ctlr **mi
 	 * 5) When everything above have been discovered, the callback is called
 	 */
 
-	CHECKIF(conn == NULL) {
+	if (conn == NULL) {
 		LOG_DBG("NULL conn");
 		return -EINVAL;
 	}
@@ -606,7 +608,7 @@ int bt_micp_mic_ctlr_cb_register(struct bt_micp_mic_ctlr_cb *cb)
 {
 	struct bt_micp_mic_ctlr_cb *tmp;
 
-	CHECKIF(cb == NULL) {
+	if (cb == NULL) {
 		return -EINVAL;
 	}
 
@@ -626,12 +628,12 @@ int bt_micp_mic_ctlr_cb_register(struct bt_micp_mic_ctlr_cb *cb)
 int bt_micp_mic_ctlr_included_get(struct bt_micp_mic_ctlr *mic_ctlr,
 				  struct bt_micp_included *included)
 {
-	CHECKIF(mic_ctlr == NULL) {
+	if (mic_ctlr == NULL) {
 		LOG_DBG("NULL mic_ctlr");
 		return -EINVAL;
 	}
 
-	CHECKIF(included == NULL) {
+	if (included == NULL) {
 		return -EINVAL;
 	}
 
@@ -646,7 +648,7 @@ struct bt_micp_mic_ctlr *bt_micp_mic_ctlr_get_by_conn(const struct bt_conn *conn
 {
 	struct bt_micp_mic_ctlr *mic_ctlr;
 
-	CHECKIF(conn == NULL) {
+	if (conn == NULL) {
 		LOG_DBG("NULL conn pointer");
 		return NULL;
 	}
@@ -663,7 +665,7 @@ struct bt_micp_mic_ctlr *bt_micp_mic_ctlr_get_by_conn(const struct bt_conn *conn
 
 int bt_micp_mic_ctlr_conn_get(const struct bt_micp_mic_ctlr *mic_ctlr, struct bt_conn **conn)
 {
-	CHECKIF(mic_ctlr == NULL) {
+	if (mic_ctlr == NULL) {
 		LOG_DBG("NULL mic_ctlr pointer");
 		return -EINVAL;
 	}
@@ -682,7 +684,7 @@ int bt_micp_mic_ctlr_mute_get(struct bt_micp_mic_ctlr *mic_ctlr)
 {
 	int err;
 
-	CHECKIF(mic_ctlr == NULL) {
+	if (mic_ctlr == NULL) {
 		LOG_DBG("NULL mic_ctlr");
 		return -EINVAL;
 	}
@@ -697,7 +699,7 @@ int bt_micp_mic_ctlr_mute_get(struct bt_micp_mic_ctlr *mic_ctlr)
 	}
 
 	mic_ctlr->read_params.func = micp_mic_ctlr_read_mute_cb;
-	mic_ctlr->read_params.handle_count = 1;
+	mic_ctlr->read_params.handle_count = 1U;
 	mic_ctlr->read_params.single.handle = mic_ctlr->mute_handle;
 	mic_ctlr->read_params.single.offset = 0U;
 
@@ -713,7 +715,7 @@ static int bt_micp_mic_ctlr_write_mute(struct bt_micp_mic_ctlr *mic_ctlr, bool m
 {
 	int err;
 
-	CHECKIF(mic_ctlr == NULL) {
+	if (mic_ctlr == NULL) {
 		LOG_DBG("NULL mic_ctlr");
 		return -EINVAL;
 	}

@@ -5,7 +5,7 @@
 #
 
 identifier: mimxrt1160_evk/mimxrt1166/cm7
-name: NXP MIMXRT1160-EVK CM7
+name: NXP MIMXRT1160-EVK (CM7)
 type: mcu
 arch: arm
 toolchain:
@@ -25,5 +25,6 @@ supported:
   - pwm
   - spi
   - usb_device
+  - usbd
   - watchdog
 vendor: nxp

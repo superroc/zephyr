@@ -17,6 +17,7 @@
 #include <zephyr/sys/__assert.h>
 #include <zephyr/init.h>
 #include <zephyr/drivers/uart.h>
+#include <zephyr/drivers/pinctrl.h>
 #include <zephyr/irq.h>
 
 #define BCM2711_MU_IO			0x00
@@ -52,10 +53,11 @@
 struct bcm2711_uart_config {
 	DEVICE_MMIO_ROM; /* Must be first */
 	uint32_t baud_rate;
-	uint32_t clocks;
+	uint32_t pclk;
 #ifdef CONFIG_UART_INTERRUPT_DRIVEN
 	void (*irq_config_func)(const struct device *dev);
 #endif
+	const struct pinctrl_dev_config *pincfg;
 };
 
 struct bcm2711_uart_data {
@@ -129,10 +131,18 @@ static int uart_bcm2711_init(const struct device *dev)
 {
 	const struct bcm2711_uart_config *uart_cfg = dev->config;
 	struct bcm2711_uart_data *uart_data = dev->data;
+	int err;
 
 	DEVICE_MMIO_MAP(dev, K_MEM_CACHE_NONE);
 	uart_data->uart_addr = DEVICE_MMIO_GET(dev);
-	bcm2711_mu_lowlevel_init(uart_data->uart_addr, 1, uart_cfg->baud_rate, uart_cfg->clocks);
+
+	err = pinctrl_apply_state(uart_cfg->pincfg, PINCTRL_STATE_DEFAULT);
+	if (err < 0) {
+		return err;
+	}
+
+	bcm2711_mu_lowlevel_init(uart_data->uart_addr, 1, uart_cfg->baud_rate, uart_cfg->pclk);
+
 #ifdef CONFIG_UART_INTERRUPT_DRIVEN
 	uart_cfg->irq_config_func(dev);
 #endif
@@ -150,11 +160,12 @@ static int uart_bcm2711_poll_in(const struct device *dev, unsigned char *c)
 {
 	struct bcm2711_uart_data *uart_data = dev->data;
 
-	while (!bcm2711_mu_lowlevel_can_getc(uart_data->uart_addr)) {
-		;
+	if (!bcm2711_mu_lowlevel_can_getc(uart_data->uart_addr)) {
+		return -1;
 	}
 
-	return sys_read32(uart_data->uart_addr + BCM2711_MU_IO) & 0xFF;
+	*c = sys_read32(uart_data->uart_addr + BCM2711_MU_IO) & 0xFF;
+	return 0;
 }
 
 #ifdef CONFIG_UART_INTERRUPT_DRIVEN
@@ -188,18 +199,28 @@ static int uart_bcm2711_fifo_read(const struct device *dev, uint8_t *rx_data,
 	return num_rx;
 }
 
+/*
+ * IER is a read/write register and the TX/RX enable bits live side
+ * by side in it; toggling one bit must not disturb the other (or
+ * any of the upper IER bits, which on the BCM283x mini-UART include
+ * the FIFO-clear shortcuts). Use read-modify-write so each helper
+ * only touches the bit it owns.
+ */
 static void uart_bcm2711_irq_tx_enable(const struct device *dev)
 {
 	struct bcm2711_uart_data *uart_data = dev->data;
+	uint32_t ier = sys_read32(uart_data->uart_addr + BCM2711_MU_IER);
 
-	sys_write32(BCM2711_MU_IER_TX_INTERRUPT, uart_data->uart_addr + BCM2711_MU_IER);
+	sys_write32(ier | BCM2711_MU_IER_TX_INTERRUPT,
+		    uart_data->uart_addr + BCM2711_MU_IER);
 }
 
 static void uart_bcm2711_irq_tx_disable(const struct device *dev)
 {
 	struct bcm2711_uart_data *uart_data = dev->data;
+	uint32_t ier = sys_read32(uart_data->uart_addr + BCM2711_MU_IER);
 
-	sys_write32((uint32_t)(~BCM2711_MU_IER_TX_INTERRUPT),
+	sys_write32(ier & ~BCM2711_MU_IER_TX_INTERRUPT,
 		    uart_data->uart_addr + BCM2711_MU_IER);
 }
 
@@ -213,15 +234,18 @@ static int uart_bcm2711_irq_tx_ready(const struct device *dev)
 static void uart_bcm2711_irq_rx_enable(const struct device *dev)
 {
 	struct bcm2711_uart_data *uart_data = dev->data;
+	uint32_t ier = sys_read32(uart_data->uart_addr + BCM2711_MU_IER);
 
-	sys_write32(BCM2711_MU_IER_RX_INTERRUPT, uart_data->uart_addr + BCM2711_MU_IER);
+	sys_write32(ier | BCM2711_MU_IER_RX_INTERRUPT,
+		    uart_data->uart_addr + BCM2711_MU_IER);
 }
 
 static void uart_bcm2711_irq_rx_disable(const struct device *dev)
 {
 	struct bcm2711_uart_data *uart_data = dev->data;
+	uint32_t ier = sys_read32(uart_data->uart_addr + BCM2711_MU_IER);
 
-	sys_write32((uint32_t)(~BCM2711_MU_IER_RX_INTERRUPT),
+	sys_write32(ier & ~BCM2711_MU_IER_RX_INTERRUPT,
 		    uart_data->uart_addr + BCM2711_MU_IER);
 }
 
@@ -238,11 +262,6 @@ static int uart_bcm2711_irq_is_pending(const struct device *dev)
 
 	return bcm2711_mu_lowlevel_can_getc(uart_data->uart_addr) ||
 		bcm2711_mu_lowlevel_can_putc(uart_data->uart_addr);
-}
-
-static int uart_bcm2711_irq_update(const struct device *dev)
-{
-	return 1;
 }
 
 static void uart_bcm2711_irq_callback_set(const struct device *dev,
@@ -289,44 +308,54 @@ static DEVICE_API(uart, uart_bcm2711_driver_api) = {
 	.irq_rx_disable   = uart_bcm2711_irq_rx_disable,
 	.irq_rx_ready	  = uart_bcm2711_irq_rx_ready,
 	.irq_is_pending   = uart_bcm2711_irq_is_pending,
-	.irq_update		  = uart_bcm2711_irq_update,
 	.irq_callback_set = uart_bcm2711_irq_callback_set,
 #endif	/* CONFIG_UART_INTERRUPT_DRIVEN */
 
 };
 
-#define UART_DECLARE_CFG(n, IRQ_FUNC_INIT)                                                         \
-	static const struct bcm2711_uart_config bcm2711_uart_##n##_config = {                      \
-		DEVICE_MMIO_ROM_INIT(DT_DRV_INST(n)), .baud_rate = DT_INST_PROP(n, current_speed), \
-		.clocks = DT_INST_PROP(n, clock_frequency), IRQ_FUNC_INIT}
+#define UART_BCM2711_PINCTRL_DEFINE(port) \
+	PINCTRL_DT_INST_DEFINE(port)
 
 #ifdef CONFIG_UART_INTERRUPT_DRIVEN
-#define UART_CONFIG_FUNC(n)                                                                        \
-	static void irq_config_func_##n(const struct device *dev)                                  \
+
+#define UART_BCM2711_IRQ_CONF_FUNC_SET(port) .irq_config_func = irq_config_func_##port,
+
+#define UART_BCM2711_IRQ_CONF_FUNC(port)                                                           \
+	static void irq_config_func_##port(const struct device *dev)                               \
 	{                                                                                          \
-		IRQ_CONNECT(DT_INST_IRQN(n), DT_INST_IRQ(n, priority), uart_isr,                   \
-			    DEVICE_DT_INST_GET(n), 0);                                             \
-		irq_enable(DT_INST_IRQN(n));                                                       \
+		IRQ_CONNECT(DT_INST_IRQN(port), DT_INST_IRQ(port, priority), uart_isr,             \
+			    DEVICE_DT_INST_GET(port), 0);                                          \
+		irq_enable(DT_INST_IRQN(port));                                                    \
 	}
-#define UART_IRQ_CFG_FUNC_INIT(n) .irq_config_func = irq_config_func_##n
-#define UART_INIT_CFG(n)          UART_DECLARE_CFG(n, UART_IRQ_CFG_FUNC_INIT(n))
+
 #else
-#define UART_CONFIG_FUNC(n)
-#define UART_IRQ_CFG_FUNC_INIT
-#define UART_INIT_CFG(n) UART_DECLARE_CFG(n, UART_IRQ_CFG_FUNC_INIT)
-#endif
 
-#define UART_INIT(n)                                                                               \
-	static struct bcm2711_uart_data bcm2711_uart_##n##_data;                                   \
-                                                                                                   \
-	static const struct bcm2711_uart_config bcm2711_uart_##n##_config;                         \
-                                                                                                   \
-	DEVICE_DT_INST_DEFINE(n, &uart_bcm2711_init, NULL, &bcm2711_uart_##n##_data,               \
-			      &bcm2711_uart_##n##_config, PRE_KERNEL_1,                            \
-			      CONFIG_SERIAL_INIT_PRIORITY, &uart_bcm2711_driver_api);              \
-                                                                                                   \
-	UART_CONFIG_FUNC(n)                                                                        \
-                                                                                                   \
-	UART_INIT_CFG(n);
+#define UART_BCM2711_IRQ_CONF_FUNC_SET(port)
+#define UART_BCM2711_IRQ_CONF_FUNC(port)
 
-DT_INST_FOREACH_STATUS_OKAY(UART_INIT)
+#endif /* CONFIG_UART_INTERRUPT_DRIVEN */
+
+#define UART_BCM2711_DEV_DATA(port) \
+	static struct bcm2711_uart_data bcm2711_uart_##port##_data;
+
+#define UART_BCM2711_DEV_CFG(port)                                                                 \
+	static const struct bcm2711_uart_config bcm2711_uart_##port##_config = {                   \
+		DEVICE_MMIO_ROM_INIT(DT_DRV_INST(port)),                                           \
+		.baud_rate = DT_INST_PROP(port, current_speed),                                    \
+		.pclk = DT_INST_PROP_BY_PHANDLE(port, clocks, clock_frequency),                    \
+		.pincfg = PINCTRL_DT_INST_DEV_CONFIG_GET(port),                                    \
+		UART_BCM2711_IRQ_CONF_FUNC_SET(port)}
+
+#define UART_BCM2711_INIT(port)                                                                    \
+	DEVICE_DT_INST_DEFINE(port, &uart_bcm2711_init, NULL, &bcm2711_uart_##port##_data,         \
+			      &bcm2711_uart_##port##_config, PRE_KERNEL_1,                         \
+			      CONFIG_SERIAL_INIT_PRIORITY, &uart_bcm2711_driver_api);
+
+#define UART_BCM2711_INSTANTIATE(inst)                                                             \
+	UART_BCM2711_PINCTRL_DEFINE(inst);                                                         \
+	UART_BCM2711_IRQ_CONF_FUNC(inst);                                                          \
+	UART_BCM2711_DEV_DATA(inst);                                                               \
+	UART_BCM2711_DEV_CFG(inst);                                                                \
+	UART_BCM2711_INIT(inst);
+
+DT_INST_FOREACH_STATUS_OKAY(UART_BCM2711_INSTANTIATE)

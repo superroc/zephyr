@@ -11,7 +11,6 @@
  */
 
 #include <zephyr/kernel.h>
-#include <zephyr/kernel_structs.h>
 #include <zephyr/arch/cpu.h>
 #include <zephyr/pm/device.h>
 #include <zephyr/types.h>
@@ -243,7 +242,7 @@ void z_loapic_irq_enable(unsigned int irq)
 
 	/*
 	 * See the comments in _LoApicLvtVecSet() regarding IRQ to LVT mappings
-	 * and ths assumption concerning LVT spacing.
+	 * and the assumption concerning LVT spacing.
 	 */
 
 	/* clear the mask bit in the LVT */
@@ -269,7 +268,7 @@ void z_loapic_irq_disable(unsigned int irq)
 
 	/*
 	 * See the comments in _LoApicLvtVecSet() regarding IRQ to LVT mappings
-	 * and ths assumption concerning LVT spacing.
+	 * and the assumption concerning LVT spacing.
 	 */
 
 	/* set the mask bit in the LVT */

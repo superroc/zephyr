@@ -149,9 +149,18 @@
 	status = "okay";
 };
 
+&spi5 {
+	pinctrl-0 = <&spi5_nss_pf6 &spi5_sck_ph7
+		     &spi5_miso_pa8 &spi5_mosi_ph3>;
+	pinctrl-names = "default";
+	status = "okay";
+};
+
 &i2c1 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&i2c1_scl_pd12 &i2c1_sda_pe8>;
+	scl-gpios = <&gpiod 12 GPIO_ACTIVE_HIGH>;
+	sda-gpios = <&gpioe 8 GPIO_ACTIVE_HIGH>;
 	status = "okay";
 
 	mcp23017: pinctrl@21 {
@@ -166,12 +175,16 @@
 &i2c4 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&i2c4_scl_pe15 &i2c4_sda_pb9>;
+	scl-gpios = <&gpioe 15 GPIO_ACTIVE_HIGH>;
+	sda-gpios = <&gpiob 9 GPIO_ACTIVE_HIGH>;
 	status = "okay";
 };
 
 csi_i2c: &i2c5 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&i2c5_scl_pd1 &i2c5_sda_ph6>;
+	scl-gpios = <&gpiod 1 GPIO_ACTIVE_HIGH>;
+	sda-gpios = <&gpioh 6 GPIO_ACTIVE_HIGH>;
 	status = "okay";
 
 	mipid02: bridge@14 {
@@ -273,7 +286,8 @@ csi_interface: &dcmipp {
  * enabled by a shield when camera pipeline is enabled
  */
 &mco1 {
-	clocks = <&rcc STM32_SRC_HSE MCO1_SEL(MCO1_SEL_HSE)>;
+	clocks = <&rcc MCO1CFGR_REG BIT(12)>, <&rcc STM32_SRC_HSE MCO1_SEL(MCO1_SEL_HSE)>;
+	clock-names = "clken", "clksel";
 	prescaler = <MCO1_PRE(MCO_PRE_DIV_1)>;
 	pinctrl-0 = <&rcc_mco_1_pd7>;
 	pinctrl-names = "default";

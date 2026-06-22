@@ -23,7 +23,9 @@ Hardware
 - 64 Mbit Quad SPI Flash
 - AT24MAC402 Serial EEPROM with EUI-48™ MAC address
 - Ethernet 10/100 Mbps
-   - RMII Interface with modular PHY Header
+
+  - RMII Interface with modular PHY Header
+
 - SD/SDIO card connector
 - Two CAN interfaces with on-board transceivers
 - I²C-based temperature sensor
@@ -31,9 +33,13 @@ Hardware
 - mikroBUS header connector
 - Arduino Uno header connectors
 - CoreSight 10 connector
-   - 10-pin Cortex® Debug header (SWD)
+
+  - 10-pin Cortex® Debug header (SWD)
+
 - CoreSight 20 connector
-   - 20-pin Cortex Debug + ETM Connector (SWD and 4-bit Trace)
+
+  - 20-pin Cortex Debug + ETM Connector (SWD and 4-bit Trace)
+
 - Virtual COM port (CDC)
 - USB powered
 - Power Header and Barrel Jack connector for external power sources
@@ -52,6 +58,33 @@ Programming & Debugging
 ***********************
 
 .. zephyr:board-supported-runners::
+
+Flash Using MPLab IPE
+=====================
+To flash the board using MPLAB IPE, follow the steps below:
+
+1. Install MPLAB IPE
+
+   - Download the `MPLAB X IDE`_ installer from the Microchip Technology website.
+   - Extract the downloaded package and run the installer script on your system.
+   - During installation, select **MPLAB IPE** from the available components.
+   - Ensure that the ``ipecmd`` executable is available in your system ``PATH``.
+
+2. Connect the Board
+
+   - Connect the **DEBUG USB (J300)** port on the board to your host machine.
+   - This connection powers up the board and provides access to the on-board
+     Debugger (PKoB).
+   - The PKoB enables programming of the target microcontroller through MPLAB IPE.
+
+3.  Flash the Firmware
+
+   - Run the following command from your project directory:
+
+   .. code-block:: console
+
+      west flash
+
 
 Flash Using J-Link
 ==================
@@ -87,9 +120,9 @@ To flash the board using the J-Link debugger, follow the steps below:
 
    .. code-block:: console
 
-      west flash
+      west flash -r jlink
 
-   This uses the default ``jlink`` runner to flash the application to the board.
+   This uses the jlink runner to flash the application to the board.
 
 5. Observe the Result
 
@@ -113,3 +146,6 @@ PIC32CX SG41 Curiosity Ultra evaluation kit Page:
 
 .. _J32 Debug Probe:
     https://www.microchip.com/en-us/development-tool/dv164232
+
+.. _MPLAB X IDE:
+    https://www.microchip.com/en-us/tools-resources/develop/mplab-x-ide

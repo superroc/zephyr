@@ -176,7 +176,7 @@ static int mcux_igpio_configure(const struct device *dev,
 	if ((flags & GPIO_PULL_UP) != 0) {
 		reg |= (0x1 << MCUX_IMX_BIAS_PULL_UP_SHIFT);
 	}
-	if ((flag & GPIO_PULL_DOWN) != 0) {
+	if ((flags & GPIO_PULL_DOWN) != 0) {
 		return -ENOTSUP;
 	}
 #else
@@ -292,6 +292,10 @@ static int mcux_igpio_pin_interrupt_configure(const struct device *dev,
 		return -ENOTSUP;
 	}
 
+	if (pin >= 32) {
+		return -EINVAL;
+	}
+
 	if (mode == GPIO_INT_MODE_DISABLED) {
 		key = irq_lock();
 
@@ -314,17 +318,15 @@ static int mcux_igpio_pin_interrupt_configure(const struct device *dev,
 		icr = 0;
 	}
 
+	key = irq_lock();
+
 	if (pin < 16) {
 		shift = 2 * pin;
 		base->ICR1 = (base->ICR1 & ~(3 << shift)) | (icr << shift);
-	} else if (pin < 32) {
+	} else {
 		shift = 2 * (pin - 16);
 		base->ICR2 = (base->ICR2 & ~(3 << shift)) | (icr << shift);
-	} else {
-		return -EINVAL;
 	}
-
-	key = irq_lock();
 
 	WRITE_BIT(base->EDGE_SEL, pin, trig == GPIO_INT_TRIG_BOTH);
 	WRITE_BIT(base->ISR, pin, 1);
@@ -414,13 +416,19 @@ static DEVICE_API(gpio, mcux_igpio_driver_api) = {
 									\
 	static int mcux_igpio_##n##_init(const struct device *dev)	\
 	{								\
+		GPIO_Type *base;					\
+									\
+		DEVICE_MMIO_NAMED_MAP(dev, igpio_mmio, K_MEM_CACHE_NONE | K_MEM_DIRECT_MAP); \
+									\
+		base = get_base(dev);					\
+		base->IMR = 0U;						\
+		base->ISR = 0xFFFFFFFFU;				\
+									\
 		IF_ENABLED(DT_INST_IRQ_HAS_IDX(n, 0),			\
-		   (MCUX_IGPIO_IRQ_INIT(n, 0);))		\
+		   (MCUX_IGPIO_IRQ_INIT(n, 0);))			\
 									\
 		IF_ENABLED(DT_INST_IRQ_HAS_IDX(n, 1),			\
 			   (MCUX_IGPIO_IRQ_INIT(n, 1);))		\
-									\
-		DEVICE_MMIO_NAMED_MAP(dev, igpio_mmio, K_MEM_CACHE_NONE | K_MEM_DIRECT_MAP); \
 									\
 		return 0;						\
 	}

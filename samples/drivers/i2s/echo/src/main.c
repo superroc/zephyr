@@ -21,8 +21,10 @@
 #define I2S_TX_NODE  DT_NODELABEL(i2s_tx)
 #endif
 
+#define RAM_SIZE (DT_CHOSEN_SRAM_ADDR / 1024)
+
 /* Reduce echo delay when running on low ram devices */
-#if CONFIG_SRAM_SIZE <= 48
+#if RAM_SIZE <= 48
 #define ECHO_DELAY 30
 #else
 #define ECHO_DELAY 10
@@ -274,7 +276,7 @@ int main(void)
 	audio_cfg.dai_cfg.i2s.word_size = SAMPLE_BIT_WIDTH;
 	audio_cfg.dai_cfg.i2s.channels = NUMBER_OF_CHANNELS;
 	audio_cfg.dai_cfg.i2s.format = I2S_FMT_DATA_FORMAT_I2S;
-	audio_cfg.dai_cfg.i2s.options = I2S_OPT_FRAME_CLK_MASTER;
+	audio_cfg.dai_cfg.i2s.options = I2S_OPT_FRAME_CLK_CONTROLLER;
 	audio_cfg.dai_cfg.i2s.frame_clk_freq = SAMPLE_FREQUENCY;
 	audio_cfg.dai_cfg.i2s.mem_slab = &mem_slab;
 	audio_cfg.dai_cfg.i2s.block_size = BLOCK_SIZE;
@@ -307,12 +309,12 @@ int main(void)
 	config.format = I2S_FMT_DATA_FORMAT_I2S;
 	/*
 	 * On MAX32655FTHR, MAX9867 MCLK is connected to external 12.2880 crystal
-	 * thus using slave mode
+	 * thus using target mode
 	 */
 #if CONFIG_BOARD_MAX32655FTHR_MAX32655_M4
-	config.options = I2S_OPT_BIT_CLK_SLAVE | I2S_OPT_FRAME_CLK_SLAVE;
+	config.options = I2S_OPT_BIT_CLK_TARGET | I2S_OPT_FRAME_CLK_TARGET;
 #else
-	config.options = I2S_OPT_BIT_CLK_MASTER | I2S_OPT_FRAME_CLK_MASTER;
+	config.options = I2S_OPT_BIT_CLK_CONTROLLER | I2S_OPT_FRAME_CLK_CONTROLLER;
 #endif
 	config.frame_clk_freq = SAMPLE_FREQUENCY;
 	config.mem_slab = &mem_slab;
@@ -338,7 +340,7 @@ int main(void)
 
 		while (k_sem_take(&toggle_transfer, K_NO_WAIT) != 0) {
 			void *mem_block;
-			uint32_t block_size;
+			size_t block_size;
 			int ret;
 
 			ret = i2s_read(i2s_dev_rx, &mem_block, &block_size);

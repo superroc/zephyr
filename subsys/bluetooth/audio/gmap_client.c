@@ -20,7 +20,7 @@
 #include <zephyr/net_buf.h>
 #include <zephyr/sys/__assert.h>
 #include <zephyr/sys/atomic.h>
-#include <zephyr/sys/check.h>
+#include <zephyr/toolchain.h>
 
 #include "audio_internal.h"
 
@@ -85,9 +85,10 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 {
 	struct bt_gmap_client *gmap_cli = client_by_conn(conn);
 
+	ARG_UNUSED(reason);
+
 	if (gmap_cli != NULL) {
-		bt_conn_unref(gmap_cli->conn);
-		gmap_cli->conn = NULL;
+		bt_conn_drop(&gmap_cli->conn);
 	}
 }
 
@@ -241,7 +242,7 @@ static uint8_t bgs_feat_read_cb(struct bt_conn *conn, uint8_t att_err,
 		return BT_GATT_ITER_STOP;
 	}
 
-	if (err) {
+	if (err != 0) {
 		discover_failed(gmap_cli, err);
 	}
 
@@ -342,7 +343,7 @@ static uint8_t ugt_feat_read_cb(struct bt_conn *conn, uint8_t att_err,
 		return BT_GATT_ITER_STOP;
 	}
 
-	if (err) {
+	if (err != 0) {
 		discover_failed(gmap_cli, err);
 	}
 
@@ -445,7 +446,7 @@ static uint8_t ugg_feat_read_cb(struct bt_conn *conn, uint8_t att_err,
 		return BT_GATT_ITER_STOP;
 	}
 
-	if (err) {
+	if (err != 0) {
 		discover_failed(gmap_cli, err);
 	}
 
@@ -549,7 +550,7 @@ static uint8_t role_read_cb(struct bt_conn *conn, uint8_t att_err,
 		err = -ECANCELED;
 	}
 
-	if (err) {
+	if (err != 0) {
 		discover_failed(gmap_cli, err);
 	}
 
@@ -647,7 +648,7 @@ int bt_gmap_discover(struct bt_conn *conn)
 	struct bt_gmap_client *gmap_cli;
 	int err;
 
-	CHECKIF(conn == NULL) {
+	if (conn == NULL) {
 		LOG_DBG("NULL conn");
 
 		return -EINVAL;
@@ -685,7 +686,7 @@ int bt_gmap_discover(struct bt_conn *conn)
 
 int bt_gmap_cb_register(const struct bt_gmap_cb *cb)
 {
-	CHECKIF(cb == NULL) {
+	if (cb == NULL) {
 		LOG_DBG("cb is NULL");
 
 		return -EINVAL;

@@ -112,7 +112,15 @@ struct shell;
 struct shell_static_args {
 	uint8_t mandatory; /*!< Number of mandatory arguments. */
 	uint8_t optional;  /*!< Number of optional arguments. */
+	uint16_t remote_cmd: 2; /*!< Remote shell command type; non-zero for remote shell. */
+	uint16_t remote_id: 4;  /*!< Remote connection id; valid only if remote_cmd is non-zero. */
 };
+
+/** @brief Flag indicating a root remote command. */
+#define SHELL_CMD_FLAG_REMOTE_ROOT BIT(0)
+
+/** @brief Flag indicating a remote subcommand. */
+#define SHELL_CMD_FLAG_REMOTE_SUBCMD BIT(1)
 
 /**
  * @brief Get by index a device that matches .
@@ -326,10 +334,16 @@ struct shell_cmd_help {
  */
 static inline bool shell_help_is_structured(const char *help)
 {
-	const struct shell_cmd_help *structured = (const struct shell_cmd_help *)help;
+	const uint32_t magic32 = SHELL_STRUCTURED_HELP_MAGIC;
+	const char *magic = (const char *)&magic32;
 
-	return structured != NULL && IS_PTR_ALIGNED(structured, struct shell_cmd_help) &&
-	       structured->magic == SHELL_STRUCTURED_HELP_MAGIC;
+	/**
+	 * Check if what help points to starts with the structured help magic word,
+	 * but without assuming help is 32 bit aligned, or that if it is a string,
+	 * that it is at least 4 bytes long.
+	 */
+	return help != NULL && (magic[0] == help[0]) && (magic[1] == help[1])
+	       && (magic[2] == help[2]) && (magic[3] == help[3]);
 }
 
 #if defined(CONFIG_SHELL_HELP) || defined(__DOXYGEN__)
@@ -536,7 +550,7 @@ static inline bool shell_help_is_structured(const char *help)
 					shell_subcmds, \
 					Z_SHELL_SUBCMD_ADD_SECTION_TAG(_parent, _syntax)) = \
 			SHELL_EXPR_CMD_ARG(1, _syntax, _subcmd, _help, \
-					   _handler, _mand, _opt)\
+					   _handler, _mand, _opt, 0, 0)\
 		), \
 		(static shell_cmd_handler dummy_handler_##_syntax __unused = _handler;\
 		 static const union shell_cmd_entry dummy_subcmd_##_syntax __unused = { \
@@ -593,7 +607,7 @@ static inline bool shell_help_is_structured(const char *help)
  * @param[in] opt	 Number of optional arguments.
  */
 #define SHELL_CMD_ARG(syntax, subcmd, help, handler, mand, opt) \
-	SHELL_EXPR_CMD_ARG(1, syntax, subcmd, help, handler, mand, opt)
+	SHELL_EXPR_CMD_ARG(1, syntax, subcmd, help, handler, mand, opt, 0, 0)
 
 /**
  * @brief Initializes a conditional shell command with arguments.
@@ -616,7 +630,7 @@ static inline bool shell_help_is_structured(const char *help)
  */
 #define SHELL_COND_CMD_ARG(flag, syntax, subcmd, help, handler, mand, opt) \
 	SHELL_EXPR_CMD_ARG(IS_ENABLED(flag), syntax, subcmd, help, \
-			  handler, mand, opt)
+			  handler, mand, opt, 0, 0)
 
 /**
  * @brief Initializes a conditional shell command with arguments if expression
@@ -629,23 +643,26 @@ static inline bool shell_help_is_structured(const char *help)
  * SHELL_EXPR_CMD_ARG(IS_ENABLED(CONFIG_FOO) &&
  *		      IS_ENABLED(CONFIG_FOO_SETTING_1), ...)
  *
- * @param[in] _expr	 Expression.
- * @param[in] _syntax	 Command syntax (for example: history).
- * @param[in] _subcmd	 Pointer to a subcommands array.
- * @param[in] _help	 Pointer to a command help string.
- * @param[in] _handler	 Pointer to a function handler.
- * @param[in] _mand	 Number of mandatory arguments including command name.
- * @param[in] _opt	 Number of optional arguments.
+ * @param[in] _expr	  Expression.
+ * @param[in] _syntax	  Command syntax (for example: history).
+ * @param[in] _subcmd	  Pointer to a subcommands array.
+ * @param[in] _help	  Pointer to a command help string.
+ * @param[in] _handler	  Pointer to a function handler.
+ * @param[in] _mand	  Number of mandatory arguments including command name.
+ * @param[in] _opt	  Number of optional arguments.
+ * @param[in] _remote_cmd Remote shell command type; non-zero for remote shell.
+ * @param[in] _remote_id  Remote connection id; valid only if remote_cmd is non-zero.
  */
 #define SHELL_EXPR_CMD_ARG(_expr, _syntax, _subcmd, _help, _handler, \
-			   _mand, _opt) \
+			   _mand, _opt, _remote_cmd, _remote_id) \
 	{ \
 		.syntax = (_expr) ? (const char *)STRINGIFY(_syntax) : "", \
 		.help  = (_expr) ? (const char *)_help : NULL, \
 		.subcmd = (const union shell_cmd_entry *)((_expr) ? \
 				_subcmd : NULL), \
 		.handler = (shell_cmd_handler)((_expr) ? _handler : NULL), \
-		.args = { .mandatory = _mand, .optional = _opt} \
+		.args = { .mandatory = _mand, .optional = _opt, \
+			.remote_cmd = _remote_cmd, .remote_id = _remote_id } \
 	}
 
 /**
@@ -688,7 +705,7 @@ static inline bool shell_help_is_structured(const char *help)
  * @param[in] _handler	Pointer to a function handler.
  */
 #define SHELL_EXPR_CMD(_expr, _syntax, _subcmd, _help, _handler) \
-	SHELL_EXPR_CMD_ARG(_expr, _syntax, _subcmd, _help, _handler, 0, 0)
+	SHELL_EXPR_CMD_ARG(_expr, _syntax, _subcmd, _help, _handler, 0, 0, 0, 0)
 
 /* Internal macro used for creating handlers for dictionary commands. */
 #define Z_SHELL_CMD_DICT_HANDLER_CREATE(_data, _handler)		\
@@ -747,6 +764,8 @@ static int UTIL_CAT(UTIL_CAT(cmd_dict_, UTIL_CAT(_handler, _)),		\
 		SHELL_SUBCMD_SET_END					\
 	)
 
+/* @cond INTERNAL_HIDDEN */
+
 /**
  * @internal @brief Internal shell state in response to data received from the
  * terminal.
@@ -774,6 +793,15 @@ enum shell_transport_evt {
 	SHELL_TRANSPORT_EVT_RX_RDY,
 	SHELL_TRANSPORT_EVT_TX_RDY
 };
+
+enum shell_readline_state {
+	SHELL_READLINE_INACTIVE,
+	SHELL_READLINE_ACTIVE,
+	SHELL_READLINE_DONE,
+	SHELL_READLINE_CANCELED,
+};
+
+/* @endcond */
 
 typedef void (*shell_transport_handler_t)(enum shell_transport_evt evt,
 					  void *context);
@@ -906,6 +934,7 @@ struct shell_backend_config_flags {
 	uint32_t mode_delete :1; /*!< Operation mode of backspace key */
 	uint32_t use_colors  :1; /*!< Controls colored syntax */
 	uint32_t use_vt100   :1; /*!< Controls VT100 commands usage in shell */
+	uint32_t _reserved   :26;
 };
 
 BUILD_ASSERT((sizeof(struct shell_backend_config_flags) == sizeof(uint32_t)),
@@ -925,14 +954,15 @@ BUILD_ASSERT((sizeof(struct shell_backend_config_flags) == sizeof(uint32_t)),
 };
 
 struct shell_backend_ctx_flags {
+	uint32_t last_nl      :8; /*!< Last received new line character */
 	uint32_t processing   :1; /*!< Shell is executing process function */
 	uint32_t tx_rdy       :1;
 	uint32_t history_exit :1; /*!< Request to exit history mode */
-	uint32_t last_nl      :8; /*!< Last received new line character */
 	uint32_t cmd_ctx      :1; /*!< Shell is executing command */
 	uint32_t print_noinit :1; /*!< Print request from not initialized shell */
 	uint32_t sync_mode    :1; /*!< Shell in synchronous mode */
 	uint32_t handle_log   :1; /*!< Shell is handling logger backend */
+	uint32_t _reserved    :17;
 };
 
 BUILD_ASSERT((sizeof(struct shell_backend_ctx_flags) == sizeof(uint32_t)),
@@ -974,6 +1004,12 @@ struct shell_ctx {
 	enum shell_state state; /*!< Internal module state.*/
 	enum shell_receive_state receive_state;/*!< Escape sequence indicator.*/
 
+	/** Field tracking the readline state for user input */
+	enum shell_readline_state readline_state;
+
+	/** Optional prompt printed before readline input, restored after log output */
+	const char *readline_prompt;
+
 	/** Currently executed command.*/
 	struct shell_static_entry active_cmd;
 
@@ -1006,6 +1042,7 @@ struct shell_ctx {
 	uint16_t cmd_buff_pos; /*!< Command buffer cursor position.*/
 
 	uint16_t cmd_tmp_buff_len; /*!< Command length in tmp buffer.*/
+	uint16_t cmd_tmp_buff_pos; /*!< Command buffer cursor position in tmp buffer.*/
 
 	/** Command input buffer.*/
 	char cmd_buff[CONFIG_SHELL_CMD_BUFF_SIZE];
@@ -1187,6 +1224,10 @@ int shell_stop(const struct shell *sh);
  */
 #define SHELL_ERROR	SHELL_VT100_COLOR_RED
 
+#ifdef CONFIG_SHELL_REMOTE_CLI
+#include <zephyr/shell/shell_remote_cli.h>
+#endif
+
 /**
  * @brief printf-like function which sends formatted data stream to the shell.
  *
@@ -1201,7 +1242,10 @@ int shell_stop(const struct shell *sh);
 void __printf_like(3, 4) shell_fprintf_impl(const struct shell *sh, enum shell_vt100_color color,
 					    const char *fmt, ...);
 
-#define shell_fprintf(sh, color, fmt, ...) shell_fprintf_impl(sh, color, fmt, ##__VA_ARGS__)
+#define shell_fprintf(sh, color, fmt, ...)                                                         \
+	COND_CODE_1(IS_ENABLED(CONFIG_SHELL_REMOTE_CLI), \
+		(SHELL_REMOTE_CLI_FPRINTF(sh, color, fmt, ##__VA_ARGS__)), \
+		(shell_fprintf_impl(sh, color, fmt, ##__VA_ARGS__)))
 
 /**
  * @brief vprintf-like function which sends formatted data stream to the shell.
@@ -1217,6 +1261,18 @@ void __printf_like(3, 4) shell_fprintf_impl(const struct shell *sh, enum shell_v
  */
 void shell_vfprintf(const struct shell *sh, enum shell_vt100_color color,
 		   const char *fmt, va_list args);
+
+/**
+ * @brief Function which formats cbprintf package and streams it to the shell.
+ *
+ * Similar to shell_fprintf but takes a cbprintf package instead of a format string and
+ * variable arguments.
+ *
+ * @param[in] sh	Pointer to the shell instance.
+ * @param[in] color	Printed text color.
+ * @param[in] package	Pointer to the package.
+ */
+void shell_cbpprintf(const struct shell *sh, enum shell_vt100_color color, void *package);
 
 /**
  * @brief Print a line of data in hexadecimal format.
@@ -1248,15 +1304,35 @@ void shell_hexdump(const struct shell *sh, const uint8_t *data, size_t len);
 /**
  * @brief Print info message to the shell.
  *
+ * Message is terminated with a newline character. See @ref shell_fprintf.
+ *
+ * @param[in] _sh Pointer to the shell instance.
+ * @param[in] _ft Format string.
+ * @param[in] ... List of parameters to print.
+ */
+#define shell_info(_sh, _ft, ...)        shell_fprintf(_sh, SHELL_INFO, _ft "\n", ##__VA_ARGS__)
+
+/**
+ * @brief Print info message to the shell.
+ *
  * See @ref shell_fprintf.
  *
  * @param[in] _sh Pointer to the shell instance.
  * @param[in] _ft Format string.
  * @param[in] ... List of parameters to print.
  */
-#define shell_info(_sh, _ft, ...) \
-	shell_fprintf_info(_sh, _ft "\n", ##__VA_ARGS__)
-void __printf_like(2, 3) shell_fprintf_info(const struct shell *sh, const char *fmt, ...);
+#define shell_fprintf_info(_sh, _ft, ...) shell_fprintf(_sh, SHELL_INFO, _ft, ##__VA_ARGS__)
+
+/**
+ * @brief Print normal message to the shell.
+ *
+ * Message is terminated with a newline character. See @ref shell_fprintf.
+ *
+ * @param[in] _sh Pointer to the shell instance.
+ * @param[in] _ft Format string.
+ * @param[in] ... List of parameters to print.
+ */
+#define shell_print(_sh, _ft, ...)         shell_fprintf_normal(_sh, _ft "\n", ##__VA_ARGS__)
 
 /**
  * @brief Print normal message to the shell.
@@ -1267,9 +1343,18 @@ void __printf_like(2, 3) shell_fprintf_info(const struct shell *sh, const char *
  * @param[in] _ft Format string.
  * @param[in] ... List of parameters to print.
  */
-#define shell_print(_sh, _ft, ...) \
-	shell_fprintf_normal(_sh, _ft "\n", ##__VA_ARGS__)
-void __printf_like(2, 3) shell_fprintf_normal(const struct shell *sh, const char *fmt, ...);
+#define shell_fprintf_normal(_sh, _ft, ...) shell_fprintf(_sh, SHELL_NORMAL, _ft, ##__VA_ARGS__)
+
+/**
+ * @brief Print warning message to the shell.
+ *
+ * Message is terminated with a newline character. See @ref shell_fprintf.
+ *
+ * @param[in] _sh Pointer to the shell instance.
+ * @param[in] _ft Format string.
+ * @param[in] ... List of parameters to print.
+ */
+#define shell_warn(_sh, _ft, ...)        shell_fprintf_warn(_sh, _ft "\n", ##__VA_ARGS__)
 
 /**
  * @brief Print warning message to the shell.
@@ -1280,9 +1365,18 @@ void __printf_like(2, 3) shell_fprintf_normal(const struct shell *sh, const char
  * @param[in] _ft Format string.
  * @param[in] ... List of parameters to print.
  */
-#define shell_warn(_sh, _ft, ...) \
-	shell_fprintf_warn(_sh, _ft "\n", ##__VA_ARGS__)
-void __printf_like(2, 3) shell_fprintf_warn(const struct shell *sh, const char *fmt, ...);
+#define shell_fprintf_warn(_sh, _ft, ...) shell_fprintf(_sh, SHELL_WARNING, _ft, ##__VA_ARGS__)
+
+/**
+ * @brief Print error message to the shell.
+ *
+ * Message is terminated with a newline character. See @ref shell_fprintf.
+ *
+ * @param[in] _sh Pointer to the shell instance.
+ * @param[in] _ft Format string.
+ * @param[in] ... List of parameters to print.
+ */
+#define shell_error(_sh, _ft, ...)        shell_fprintf_error(_sh, _ft "\n", ##__VA_ARGS__)
 
 /**
  * @brief Print error message to the shell.
@@ -1293,9 +1387,7 @@ void __printf_like(2, 3) shell_fprintf_warn(const struct shell *sh, const char *
  * @param[in] _ft Format string.
  * @param[in] ... List of parameters to print.
  */
-#define shell_error(_sh, _ft, ...) \
-	shell_fprintf_error(_sh, _ft "\n", ##__VA_ARGS__)
-void __printf_like(2, 3) shell_fprintf_error(const struct shell *sh, const char *fmt, ...);
+#define shell_fprintf_error(_sh, _ft, ...) shell_fprintf(_sh, SHELL_ERROR, _ft, ##__VA_ARGS__)
 
 /**
  * @brief Process function, which should be executed when data is ready in the
@@ -1324,7 +1416,13 @@ int shell_prompt_change(const struct shell *sh, const char *prompt);
  *
  * @param[in] sh      Pointer to the shell instance.
  */
+#ifdef CONFIG_SHELL_HELP
 void shell_help(const struct shell *sh);
+#else
+static inline void shell_help(const struct shell *sh)
+{
+}
+#endif /* CONFIG_SHELL_HELP */
 
 /** @brief Command's help has been printed */
 #define SHELL_CMD_HELP_PRINTED	(1)
@@ -1464,6 +1562,46 @@ int shell_mode_delete_set(const struct shell *sh, bool val);
  * @return return value of previous command
  */
 int shell_get_return_value(const struct shell *sh);
+
+/**
+ * @brief Set a prompt string for the next @ref shell_readline call.
+ *
+ * The prompt is printed at the start of @ref shell_readline and restored
+ * after log messages to keep the user input line intact. The shell does not
+ * copy the string; the caller must ensure it remains valid until
+ * @ref shell_readline returns (which clears the prompt automatically).
+ *
+ * @param[in] sh     Shell instance.
+ * @param[in] prompt Prompt string to display, or NULL to clear.
+ */
+void shell_readline_prompt_set(const struct shell *sh, const char *prompt);
+
+/**
+ * @brief Read a line of input from the shell.
+ *
+ * This function reads from the shell transport until a newline character is
+ * received, storing the data in the provided buffer. The newline character is
+ * not included in the buffer. The buffer is null-terminated on success.
+ *
+ * If a prompt was set via @ref shell_readline_prompt_set, it is printed
+ * before waiting for input and restored after any log output that
+ * interrupts the input line.
+ *
+ * @note This function should be called from the shell thread in a shell command
+ *       handler and blocks the thread until a result is returned.
+ *
+ * @param[in]  sh      Shell instance.
+ * @param[out] buf     Buffer to store the input line.
+ * @param[in]  len     Maximum buffer size (including null terminator).
+ * @param[in]  timeout Maximum time to wait for a complete line.
+ *
+ * @return Number of bytes read (excluding null terminator) on success.
+ * @retval -ETIMEDOUT If timeout occurred before newline was received.
+ * @retval -ENOBUFS If @a buf is NULL or input exceeds buffer size.
+ * @retval -ECANCELED If CTRL+C was pressed.
+ * @retval -EACCES If not called from an active shell command or bypass callback is set.
+ */
+int shell_readline(const struct shell *sh, uint8_t *buf, size_t len, k_timeout_t timeout);
 
 /**
  * @}

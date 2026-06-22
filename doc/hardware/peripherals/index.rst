@@ -15,6 +15,8 @@ Peripherals
    audio/index.rst
    bbram.rst
    bc12.rst
+   biometrics.rst
+   buzzer.rst
    clock_control.rst
    can/index.rst
    charger.rst
@@ -23,6 +25,7 @@ Peripherals
    counter.rst
    crc.rst
    dac.rst
+   dali.rst
    dma.rst
    display/index.rst
    eeprom/index.rst
@@ -45,6 +48,7 @@ Peripherals
    mspi.rst
    mbox.rst
    opamp.rst
+   otp/index.rst
    pcie.rst
    peci.rst
    ps2.rst
@@ -66,3 +70,4 @@ Peripherals
    tgpio.rst
    video.rst
    watchdog.rst
+   wuc.rst

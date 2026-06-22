@@ -6,6 +6,12 @@ if SOC_FAMILY_ESPRESSIF_ESP32
 config ESPTOOLPY_OCT_FLASH
 	bool "Use Octal Flash"
 	depends on SOC_SERIES_ESP32S3
+	default y if SPIRAM_MODE_OCT
+	help
+	  Octal PSRAM modules are paired with octal flash. Enable octal flash
+	  by default in this case so its MSPI timing is tuned (DTR sample mode).
+	  Without it the flash falls back to untuned STR timing and can corrupt
+	  at high speeds. Disable manually if the board uses quad flash.
 
 config ESPTOOLPY_FLASH_MODE_AUTO_DETECT
 	depends on SOC_SERIES_ESP32S3
@@ -91,8 +97,8 @@ choice ESPTOOLPY_FLASHFREQ
 
 config ESPTOOLPY_FLASHFREQ_120M
 	bool "120 MHz"
-	select SPI_FLASH_HPM_ENABLE
-	depends on SOC_SERIES_ESP32S3 && ESPTOOLPY_FLASH_SAMPLE_MODE_STR
+	select SPI_FLASH_HPM_ENABLE if SOC_SERIES_ESP32S3
+	depends on (SOC_SERIES_ESP32C5 || SOC_SERIES_ESP32S3) && ESPTOOLPY_FLASH_SAMPLE_MODE_STR
 	help
 	  - Flash 120 MHz SDR mode is stable.
 	  - Flash 120 MHz DDR mode is an experimental feature, it works when
@@ -124,7 +130,8 @@ endchoice # ESPTOOLPY_FLASHFREQ
 
 config ESPTOOLPY_FLASHFREQ_80M_DEFAULT
 	bool
-	default y if SOC_SERIES_ESP32S2 || SOC_SERIES_ESP32S3 || SOC_SERIES_ESP32C3 || SOC_SERIES_ESP32C6
+	default y if SOC_SERIES_ESP32S2 || SOC_SERIES_ESP32S3 || SOC_SERIES_ESP32C3 || \
+		   SOC_SERIES_ESP32C5 || SOC_SERIES_ESP32C6 || SOC_SERIES_ESP32P4
 	help
 	  This is an invisible item, used to define the targets that defaults to use 80MHz Flash SPI speed.
 

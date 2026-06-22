@@ -231,12 +231,33 @@ static whd_security_t convert_zephyr_security_to_whd(int security)
 	return whd_security;
 }
 
+static uint8_t convert_whd_band_to_zephyr(whd_802_11_band_t band)
+{
+	uint8_t zephyr_band = WIFI_FREQ_BAND_UNKNOWN;
+
+	switch (band) {
+	case WHD_802_11_BAND_2_4GHZ:
+		zephyr_band = WIFI_FREQ_BAND_2_4_GHZ;
+		break;
+
+	case WHD_802_11_BAND_5GHZ:
+		zephyr_band = WIFI_FREQ_BAND_5_GHZ;
+		break;
+
+	case WHD_802_11_BAND_6GHZ:
+		zephyr_band = WIFI_FREQ_BAND_6_GHZ;
+		break;
+	}
+	return zephyr_band;
+}
+
 static void parse_scan_result(whd_scan_result_t *p_whd_result, struct wifi_scan_result *p_zy_result)
 {
 	if (p_whd_result->SSID.length != 0) {
 		p_zy_result->ssid_length = p_whd_result->SSID.length;
 		strncpy(p_zy_result->ssid, p_whd_result->SSID.value, p_whd_result->SSID.length);
 		p_zy_result->channel = p_whd_result->channel;
+		p_zy_result->band = convert_whd_band_to_zephyr(p_whd_result->band);
 		p_zy_result->security = convert_whd_security_to_zephyr(p_whd_result->security);
 		p_zy_result->rssi = (int8_t)p_whd_result->signal_strength;
 		p_zy_result->mac_length = 6;
@@ -424,18 +445,17 @@ static void airoc_wifi_network_process_ethernet_data(whd_interface_t interface, 
 	}
 }
 
-static enum ethernet_hw_caps airoc_get_capabilities(const struct device *dev)
+static enum ethernet_hw_caps airoc_get_capabilities(const struct device *dev __unused,
+						    struct net_if *iface __unused)
 {
-	ARG_UNUSED(dev);
-
 	return ETHERNET_HW_FILTERING;
 }
 
-static int airoc_set_config(const struct device *dev,
+static int airoc_set_config(const struct device *dev __unused,
+			    struct net_if *iface __unused,
 			    enum ethernet_config_type type,
 			    const struct ethernet_config *config)
 {
-	ARG_UNUSED(dev);
 	whd_mac_t whd_mac_addr;
 
 	switch (type) {
@@ -492,9 +512,8 @@ static void airoc_mgmt_init(struct net_if *iface)
 {
 	const struct device *dev = net_if_get_device(iface);
 	struct airoc_wifi_data *data = dev->data;
-	struct ethernet_context *eth_ctx = net_if_l2_data(iface);
 
-	eth_ctx->eth_if_type = L2_ETH_IF_TYPE_WIFI;
+	net_eth_set_if_type_wifi(iface);
 	data->iface = iface;
 	airoc_wifi_iface = iface;
 
@@ -516,15 +535,19 @@ static void airoc_mgmt_init(struct net_if *iface)
 
 	/* Not currently connected to a network */
 	net_if_dormant_on(iface);
-
-	/* L1 network layer (physical layer) is up */
-	net_if_carrier_on(data->iface);
 }
 
-static int airoc_mgmt_scan(const struct device *dev, struct wifi_scan_params *params,
+static int airoc_mgmt_scan(const struct device *dev,
+			   struct net_if *iface __unused,
+			   struct wifi_scan_params *params,
 			   scan_result_cb_t cb)
 {
 	struct airoc_wifi_data *data = dev->data;
+	enum wifi_scan_type scan_type = WIFI_SCAN_TYPE_ACTIVE;
+
+	if (params != NULL) {
+		scan_type = params->scan_type;
+	}
 
 	if (data->scan_rslt_cb != NULL) {
 		LOG_INF("Scan callback in progress");
@@ -538,8 +561,8 @@ static int airoc_mgmt_scan(const struct device *dev, struct wifi_scan_params *pa
 	data->scan_rslt_cb = cb;
 
 	/* Connect to the network */
-	if (whd_wifi_scan(airoc_sta_if, params->scan_type, WHD_BSS_TYPE_ANY, &(data->ssid), NULL,
-			  NULL, NULL, scan_callback, &(data->scan_result), data) != WHD_SUCCESS) {
+	if (whd_wifi_scan(airoc_sta_if, scan_type, WHD_BSS_TYPE_ANY, &(data->ssid), NULL, NULL,
+			  NULL, scan_callback, &(data->scan_result), data) != WHD_SUCCESS) {
 		LOG_ERR("Failed to start scan");
 		k_sem_give(&data->sema_common);
 		return -EAGAIN;
@@ -554,7 +577,9 @@ static bool is_invalid_security(int security, uint8_t psk_length)
 	return ((security == WIFI_SECURITY_TYPE_NONE) && (psk_length > 0));
 }
 
-static int airoc_mgmt_connect(const struct device *dev, struct wifi_connect_req_params *params)
+static int airoc_mgmt_connect(const struct device *dev,
+			      struct net_if *iface,
+			      struct wifi_connect_req_params *params)
 {
 	struct airoc_wifi_data *data = (struct airoc_wifi_data *)dev->data;
 	int ret = 0;
@@ -562,6 +587,8 @@ static int airoc_mgmt_connect(const struct device *dev, struct wifi_connect_req_
 	whd_scan_result_t usr_result = {0};
 	/* Try to scan ssid to define security */
 	whd_scan_result_t tmp_result = {0};
+	const uint8_t *security_key;
+	uint8_t key_length;
 
 	if (k_sem_take(&data->sema_common, K_MSEC(AIROC_WIFI_WAIT_SEMA_MS)) != 0) {
 		return -EAGAIN;
@@ -612,9 +639,17 @@ static int airoc_mgmt_connect(const struct device *dev, struct wifi_connect_req_
 		goto error;
 	}
 
+	if (usr_result.security == WHD_SECURITY_WPA3_SAE) {
+		security_key = params->sae_password;
+		key_length = params->sae_password_length;
+	} else {
+		security_key = params->psk;
+		key_length = params->psk_length;
+	}
+
 	/* Connect to the network */
-	if (whd_wifi_join(airoc_sta_if, &usr_result.SSID, usr_result.security, params->psk,
-			  params->psk_length) != WHD_SUCCESS) {
+	if (whd_wifi_join(airoc_sta_if, &usr_result.SSID, usr_result.security,
+			  security_key, key_length) != WHD_SUCCESS) {
 		LOG_ERR("Failed to connect with network");
 
 		ret = -EAGAIN;
@@ -623,21 +658,21 @@ static int airoc_mgmt_connect(const struct device *dev, struct wifi_connect_req_
 
 error:
 	if (ret < 0) {
-		net_if_dormant_on(data->iface);
+		net_if_dormant_on(iface);
 	} else {
-		net_if_dormant_off(data->iface);
+		net_if_dormant_off(iface);
 		data->is_sta_connected = true;
-#if defined(CONFIG_NET_DHCPV4)
-		net_dhcpv4_restart(data->iface);
-#endif /* defined(CONFIG_NET_DHCPV4) */
+#if defined(CONFIG_WIFI_STA_AUTO_DHCPV4)
+		net_dhcpv4_restart(iface);
+#endif /* defined(CONFIG_WIFI_STA_AUTO_DHCPV4) */
 	}
 
-	wifi_mgmt_raise_connect_result_event(data->iface, ret);
+	wifi_mgmt_raise_connect_result_event(iface, ret);
 	k_sem_give(&data->sema_common);
 	return ret;
 }
 
-static int airoc_mgmt_disconnect(const struct device *dev)
+static int airoc_mgmt_disconnect(const struct device *dev, struct net_if *iface)
 {
 	int ret = 0;
 	struct airoc_wifi_data *data = (struct airoc_wifi_data *)dev->data;
@@ -651,10 +686,10 @@ static int airoc_mgmt_disconnect(const struct device *dev)
 		ret = -EAGAIN;
 	} else {
 		data->is_sta_connected = false;
-		net_if_dormant_on(data->iface);
+		net_if_dormant_on(iface);
 	}
 
-	wifi_mgmt_raise_disconnect_result_event(data->iface, ret);
+	wifi_mgmt_raise_disconnect_result_event(iface, ret);
 	k_sem_give(&data->sema_common);
 
 	return ret;
@@ -674,12 +709,14 @@ static void *airoc_wifi_ap_link_events_handler(whd_interface_t ifp,
 	return NULL;
 }
 
-static int airoc_mgmt_ap_enable(const struct device *dev, struct wifi_connect_req_params *params)
+static int airoc_mgmt_ap_enable(const struct device *dev,
+				struct net_if *iface,
+				struct wifi_connect_req_params *params)
 {
 	struct airoc_wifi_data *data = dev->data;
 	whd_security_t security;
 	whd_ssid_t ssid;
-	uint8_t channel;
+	uint16_t chanspec;
 	int ret = 0;
 
 	if (k_sem_take(&data->sema_common, K_MSEC(AIROC_WIFI_WAIT_SEMA_MS)) != 0) {
@@ -715,13 +752,31 @@ static int airoc_mgmt_ap_enable(const struct device *dev, struct wifi_connect_re
 	 * - 2G channels from 1 to 11,
 	 * - 5G channels from 36 to 165
 	 */
-	if (((params->channel > 0) && (params->channel < 12)) ||
-	    ((params->channel > 35) && (params->channel < 166))) {
-		channel = params->channel;
+	if ((params->channel > 0) && (params->channel < 12)) {
+		chanspec = params->channel | GET_C_VAR(airoc_ap_if->whd_driver, CHANSPEC_BAND_2G);
+	} else if ((params->channel > 35) && (params->channel < 166)) {
+		chanspec = params->channel | GET_C_VAR(airoc_ap_if->whd_driver, CHANSPEC_BAND_5G);
 	} else {
-		channel = 1;
+		chanspec = 1 | GET_C_VAR(airoc_ap_if->whd_driver, CHANSPEC_BAND_2G);
 		LOG_WRN("Discard of setting unsupported channel: %u (will set 1)",
 			params->channel);
+	}
+
+	switch (params->bandwidth) {
+	case WIFI_FREQ_BANDWIDTH_20MHZ:
+		chanspec |= GET_C_VAR(airoc_ap_if->whd_driver, CHANSPEC_BW_20);
+		break;
+	case WIFI_FREQ_BANDWIDTH_40MHZ:
+		chanspec |= GET_C_VAR(airoc_ap_if->whd_driver, CHANSPEC_BW_40);
+		break;
+	case WIFI_FREQ_BANDWIDTH_80MHZ:
+		chanspec |= GET_C_VAR(airoc_ap_if->whd_driver, CHANSPEC_BW_80);
+		break;
+	default:
+		chanspec |= GET_C_VAR(airoc_ap_if->whd_driver, CHANSPEC_BW_20);
+		LOG_WRN("Discard of setting unsupported bandwidth: %u (will set 20MHz)",
+			params->bandwidth);
+		break;
 	}
 
 	switch (params->security) {
@@ -739,7 +794,7 @@ static int airoc_mgmt_ap_enable(const struct device *dev, struct wifi_connect_re
 	}
 
 	if (whd_wifi_init_ap(airoc_ap_if, &ssid, security, (const uint8_t *)params->psk,
-			     params->psk_length, channel) != 0) {
+			     params->psk_length, chanspec) != 0) {
 		LOG_ERR("Failed to init whd ap interface");
 		ret = -EAGAIN;
 		goto error;
@@ -762,7 +817,7 @@ static int airoc_mgmt_ap_enable(const struct device *dev, struct wifi_connect_re
 
 	data->is_ap_up = true;
 	airoc_if = airoc_ap_if;
-	net_if_dormant_off(data->iface);
+	net_if_dormant_off(iface);
 error:
 
 	k_sem_give(&data->sema_common);
@@ -770,7 +825,9 @@ error:
 }
 
 #if defined(CONFIG_NET_STATISTICS_WIFI)
-static int airoc_mgmt_wifi_stats(const struct device *dev, struct net_stats_wifi *stats)
+static int airoc_mgmt_wifi_stats(const struct device *dev,
+				 struct net_if *iface __unused,
+				 struct net_stats_wifi *stats)
 {
 	struct airoc_wifi_data *data = dev->data;
 
@@ -791,7 +848,7 @@ static int airoc_mgmt_wifi_stats(const struct device *dev, struct net_stats_wifi
 }
 #endif
 
-static int airoc_mgmt_ap_disable(const struct device *dev)
+static int airoc_mgmt_ap_disable(const struct device *dev, struct net_if *iface)
 {
 	cy_rslt_t whd_ret;
 	struct airoc_wifi_data *data = dev->data;
@@ -808,7 +865,7 @@ static int airoc_mgmt_ap_disable(const struct device *dev)
 	if (whd_ret == CY_RSLT_SUCCESS) {
 		data->is_ap_up = false;
 		airoc_if = airoc_sta_if;
-		net_if_dormant_on(data->iface);
+		net_if_dormant_on(iface);
 	} else {
 		LOG_ERR("Can't stop wifi ap: %u", whd_ret);
 	}
@@ -822,7 +879,9 @@ static int airoc_mgmt_ap_disable(const struct device *dev)
 	return 0;
 }
 
-static int airoc_iface_status(const struct device *dev, struct wifi_iface_status *status)
+static int airoc_iface_status(const struct device *dev,
+			      struct net_if *iface __unused,
+			      struct wifi_iface_status *status)
 {
 	struct airoc_wifi_data *data = dev->data;
 	whd_result_t result;

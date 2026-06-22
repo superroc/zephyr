@@ -30,6 +30,7 @@
 /* Group 2 */
 #define IT51XXX_IRQ_SMB_C      16
 #define IT51XXX_IRQ_WU24       17
+#define IT51XXX_IRQ_PS2_0      20
 #define IT51XXX_IRQ_WU22       21
 /* Group 3 */
 #define IT51XXX_IRQ_KBC_IBF    24
@@ -58,6 +59,11 @@
 #define IT51XXX_IRQ_WU66       54
 #define IT51XXX_IRQ_WU67       55
 /* Group 7 */
+/** RTC alarm1 interrupt */
+#define IT51XXX_IRQ_RTCT_ALARM1 56
+/** RTC alarm2 interrupt */
+#define IT51XXX_IRQ_RTCT_ALARM2 57
+
 #define IT51XXX_IRQ_TIMER2     58
 /* Group 8 */
 #define IT51XXX_IRQ_PMC3_IBF   67

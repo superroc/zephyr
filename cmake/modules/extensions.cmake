@@ -3,6 +3,7 @@
 include_guard(GLOBAL)
 
 include(user_cache)
+include(yaml)
 
 # Dependencies on CMake modules from the CMake distribution.
 include(CheckCCompilerFlag)
@@ -37,7 +38,6 @@ include(CheckCXXCompilerFlag)
 # 7 Linkable loadable extensions (llext)
 # 7.1 llext_* configuration functions
 # 7.2 add_llext_* build control functions
-# 7.3 llext helper functions
 # 8. Script mode handling
 
 ########################################################
@@ -737,6 +737,53 @@ function(generate_inc_file_for_target
 
   add_custom_target(${generated_target_name} DEPENDS ${generated_file})
   generate_inc_file_for_gen_target(${target} ${source_file} ${generated_file} ${generated_target_name} ${ARGN})
+endfunction()
+
+function(generate_shell_aliases_inc_file
+    source_file    # The source file to be converted to array element
+    generated_file # The generated file
+    )
+  add_custom_command(
+    OUTPUT ${generated_file}
+    COMMAND
+    ${PYTHON_EXECUTABLE}
+    ${ZEPHYR_BASE}/scripts/build/gen_shell_aliases.py
+    --max-command-len ${CONFIG_SHELL_CMD_BUFF_SIZE}
+    ${source_file}
+    > ${generated_file}
+    DEPENDS ${source_file}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+endfunction()
+
+function(generate_shell_aliases_inc_file_for_gen_target
+    target          # The cmake target that depends on the generated file
+    source_file     # The source file to be converted to array element
+    generated_file  # The generated file
+    gen_target      # The generated file target we depend on
+    )
+  generate_shell_aliases_inc_file(${source_file} ${generated_file})
+
+  # Ensure 'generated_file' is generated before 'target' by creating a
+  # dependency between the two targets
+
+  add_dependencies(${target} ${gen_target})
+endfunction()
+
+function(generate_shell_aliases_inc_file_for_target
+    target          # The cmake target that depends on the generated file
+    source_file     # The source file to be converted to array element
+    generated_file  # The generated file
+    )
+  # Ensure 'generated_file' is generated before 'target' by creating a
+  # 'custom_target' for it and setting up a dependency between the two
+  # targets
+
+  # But first create a unique name for the custom target
+  generate_unique_target_name_from_filename(${generated_file} generated_target_name)
+
+  add_custom_target(${generated_target_name} DEPENDS ${generated_file})
+  generate_shell_aliases_inc_file_for_gen_target(${target} ${source_file} ${generated_file} ${generated_target_name})
 endfunction()
 
 # 1.4. board_*
@@ -1547,6 +1594,31 @@ function(zephyr_code_relocate)
   if(CODE_REL_PHDR)
     set(CODE_REL_LOCATION "${CODE_REL_LOCATION}\ :${CODE_REL_PHDR}")
   endif()
+  # Disable LTO for relocated files. LTO changes section names (e.g. .text
+  # becomes .gnu.debuglto_.text) which breaks gen_relocate_app.py section
+  # parsing. See issue #69730.
+  if(CODE_REL_FILES AND NOT no_genex STREQUAL CODE_REL_FILES)
+    # File list contains generator expressions - LTO cannot be disabled
+    # statically. Warn so the developer is aware LTO remains active for
+    # these files and the section name mangling issue (#69730) may still
+    # occur.
+    message(WARNING "zephyr_code_relocate(): file list contains generator "
+      "expressions, LTO cannot be disabled for these files. "
+      "Avoid combining CONFIG_LTO with CONFIG_CODE_DATA_RELOCATION when "
+      "using generator expressions (see issue #69730).")
+  elseif(CODE_REL_FILES)
+    set_source_files_properties(${file_list} PROPERTIES
+      COMPILE_OPTIONS $<TARGET_PROPERTY:compiler,prohibit_lto>)
+  elseif(CODE_REL_LIBRARY)
+    # DEFER is required here: library targets such as drivers__serial are
+    # created later in the CMake configure step (after the SoC CMakeLists.txt
+    # runs), so the target does not exist yet when zephyr_code_relocate() is
+    # called. cmake_language(DEFER CALL ...) defers the set_property() call
+    # until the end of the current directory scope, by which point all targets
+    # have been created.
+    cmake_language(DEFER CALL set_property TARGET ${CODE_REL_LIBRARY} APPEND PROPERTY
+      COMPILE_OPTIONS $<TARGET_PROPERTY:compiler,prohibit_lto>)
+  endif()
   # Each code relocation directive is placed on an independent line, instead of
   # using set_property(APPEND) to produce a ";"-separated CMake list. This way,
   # each directive can embed multiple CMake lists, representing flags and files,
@@ -1732,7 +1804,7 @@ function(zephyr_build_string outvar)
   list(REMOVE_DUPLICATES ${outvar})
 
   if(BUILD_STR_SHORT AND BUILD_STR_BOARD_QUALIFIERS)
-    string(REGEX REPLACE "^/[^/]*(.*)" "\\1" shortened_qualifiers "${BOARD_QUALIFIERS}")
+    string(REGEX REPLACE "^.[^/]*(.*)" "\\1" shortened_qualifiers "${BOARD_QUALIFIERS}")
     string(REPLACE "/" ";" str_short_segment_list "${shortened_qualifiers}")
     string(JOIN "_" ${BUILD_STR_SHORT}
            ${BUILD_STR_BOARD} ${str_short_segment_list} ${revision_string}
@@ -1873,6 +1945,91 @@ function(zephyr_blobs_verify)
       endif()
     endforeach()
   endif()
+endfunction()
+
+#
+# Usage:
+#   zephyr_custom_target_shared(<arguments>)
+#
+# Extension function of add_custom_command().
+#
+# The purpose of this function is to add the custom target to a CMake cache `ZEPHYR_SHARED_TARGETS`
+# list of targets.
+# The list of targets provides a possibility for external tools or build system to fetch important
+# build targets expected to be available to users.
+#
+# For example, Sysbuild will use this list for making build targets available to the user for the
+# image.
+#
+# All arguments to this function is passed to CMake add_custom_command() function as-is.
+#
+# Arguments:
+#  - See `add_custom_target` documentation
+#
+macro(zephyr_custom_target_shared)
+  add_custom_target(${ARGN})
+
+  zephyr_set(ZEPHYR_SHARED_TARGETS ${ARGV0} SCOPE cache APPEND)
+endmacro()
+
+# Usage:
+#   zephyr_constants_library(
+#     NAME    <name>          - OBJECT library name and base for target "<name>_h"
+#     SOURCE  <file>          - C source file using GEN_ABSOLUTE_SYM macros
+#     [HEADER  <filename>]    - output header name (default: <name>.h)
+#     [INCLUDES <dir>...]     - additional private include directories
+#     [DEPENDS <name>...]     - other constants libraries this one depends on
+#   )
+#
+# Creates an OBJECT library from a C source file containing
+# GEN_ABSOLUTE_SYM() declarations, then generates a header file from
+# the resulting symbols.  Symbols ending in _OFFSET or _SIZEOF are
+# extracted by gen_offset_header.py and the resulting header is placed
+# under include/generated/zephyr/.
+#
+# NAME is used as the OBJECT library name (like add_library(<name>)),
+# allowing callers to reference the compiled objects at link time via
+# $<TARGET_OBJECTS:name> if needed.
+#
+# DEPENDS lists other constants libraries (by NAME) whose generated
+# headers must be produced before this library is compiled.
+#
+function(zephyr_constants_library)
+  cmake_parse_arguments(ARG "" "NAME;SOURCE;HEADER" "INCLUDES;DEPENDS" ${ARGN})
+
+  zephyr_check_arguments_required_all(${CMAKE_CURRENT_FUNCTION} ARG NAME SOURCE)
+  if(NOT ARG_HEADER)
+    set(ARG_HEADER "${ARG_NAME}.h")
+  endif()
+
+  set(output_path ${PROJECT_BINARY_DIR}/include/generated/zephyr/${ARG_HEADER})
+  set(target_name ${ARG_NAME}_h)
+  set(lib_name ${ARG_NAME})
+
+  add_library(${lib_name} OBJECT ${ARG_SOURCE})
+  target_include_directories(${lib_name} PRIVATE
+    ${ZEPHYR_BASE}/kernel/include
+    ${ARG_INCLUDES}
+  )
+  target_link_libraries(${lib_name} zephyr_interface)
+
+  set_source_files_properties(${ARG_SOURCE} PROPERTIES
+    COMPILE_OPTIONS $<TARGET_PROPERTY:compiler,prohibit_lto>)
+
+  add_custom_command(
+    OUTPUT ${output_path}
+    COMMAND ${PYTHON_EXECUTABLE} ${ZEPHYR_BASE}/scripts/build/gen_offset_header.py
+    -i $<TARGET_OBJECTS:${lib_name}>
+    -o ${output_path}
+    DEPENDS ${lib_name} $<TARGET_OBJECTS:${lib_name}>
+  )
+  add_custom_target(${target_name} DEPENDS ${output_path})
+
+  add_dependencies(zephyr_generated_headers ${target_name})
+
+  foreach(dep IN LISTS ARG_DEPENDS)
+    add_dependencies(${lib_name} ${dep}_h)
+  endforeach()
 endfunction()
 
 ########################################################
@@ -2547,6 +2704,14 @@ function(set_compiler_property)
 
   set_property(TARGET compiler ${APPEND} PROPERTY ${COMPILER_PROPERTY_PROPERTY})
   set_property(TARGET compiler-cpp ${APPEND} PROPERTY ${COMPILER_PROPERTY_PROPERTY})
+
+  list(GET COMPILER_PROPERTY_PROPERTY 0 prop_name)
+  # Brief docs is used to inform if inheritance is set for the property.
+  # When inheritance is set, then the value must also be set on directory to ensure inheritance.
+  get_property(inherit TARGET NONE PROPERTY ${prop_name} BRIEF_DOCS)
+  if(inherit STREQUAL "INHERIT")
+    set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY ${COMPILER_PROPERTY_PROPERTY})
+  endif()
 endfunction()
 
 # 'check_set_compiler_property' is a function that check the provided compiler
@@ -3001,11 +3166,11 @@ endfunction()
 #   zephyr_file_suffix(<filename> SUFFIX <suffix>)
 #
 # Zephyr file add suffix extension.
-# This function will check the provied filename or list of filenames to see if they have a
+# This function will check the provided filename or list of filenames to see if they have a
 # `_<suffix>` extension to them and if so, updates the supplied variable/list with the new
 # path/paths.
 #
-# <filename>: Variable (singlular or list) of absolute path filename(s) which should be checked
+# <filename>: Variable (singular or list) of absolute path filename(s) which should be checked
 #             and updated if there is a filename which has the <suffix> present.
 # <suffix>: The suffix to test for and append to the end of the provided filename.
 #
@@ -3351,6 +3516,8 @@ function(zephyr_scope_exists result scope)
   get_property(scope_defined GLOBAL PROPERTY scope:${scope})
   if(scope_defined)
     set(${result} TRUE PARENT_SCOPE)
+  elseif(scope STREQUAL cache)
+    set(${result} TRUE PARENT_SCOPE)
   else()
     set(${result} FALSE PARENT_SCOPE)
   endif()
@@ -3361,6 +3528,9 @@ endfunction()
 #
 # Get the current value of <var> in a specific <scope>, as defined by a
 # previous zephyr_set() call. The value will be stored in the <output> var.
+#
+# Note: the scope `cache` will return the CMake cache value of the variable set
+#       in current CMake run. (cache values from earlier runs are ignored).
 #
 # <output> : Variable to store the value in
 # <scope>  : Scope for the variable look up
@@ -3387,6 +3557,9 @@ endfunction()
 # scope. The scope is used on later zephyr_get() invocation for precedence
 # handling when a variable it set in multiple scopes.
 #
+# Note: the scope `cache` sets the CMake cache value of the variable but cache
+#       values from earlier CMake runs are ignored.
+#
 # <variable>   : Name of variable
 # <value>      : Value of variable, multiple values will create a list.
 #                The SCOPE argument identifies the end of value list.
@@ -3410,6 +3583,11 @@ function(zephyr_set variable)
   set_property(GLOBAL ${property_args} PROPERTY
                ${SET_VAR_SCOPE}_scope:${variable} ${SET_VAR_UNPARSED_ARGUMENTS}
   )
+
+  if(SET_VAR_SCOPE STREQUAL cache)
+    zephyr_get_scoped(value ${SET_VAR_SCOPE} ${variable})
+    set(${variable} "${value}" CACHE INTERNAL "")
+  endif()
 endfunction()
 
 # Usage:
@@ -3718,7 +3896,7 @@ endfunction()
 #   build_info(<tag>... VALUE <value>...)
 #   build_info(<tag>... PATH  <path>...)
 #
-# This function populates the build_info.yml info file with exchangable build
+# This function populates the build_info.yml info file with exchangeable build
 # information related to the current build.
 #
 # Example:
@@ -4717,6 +4895,7 @@ function(zephyr_dt_import)
     )
 
     zephyr_file_copy(${gen_dts_cmake_temp} ${gen_dts_cmake_output} ONLY_IF_DIFFERENT)
+    file(REMOVE ${gen_dts_cmake_temp})
   endif()
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${gen_dts_cmake_script})
 
@@ -5201,10 +5380,20 @@ function(zephyr_linker_section)
     # If KVMA is set and the Kernel virtual memory settings reqs are met, we
     # substitute the VMA setting with the specified KVMA value.
     if(CONFIG_MMU)
-      math(EXPR KERNEL_MEM_VM_OFFSET
-           "(${CONFIG_KERNEL_VM_BASE} + ${CONFIG_KERNEL_VM_OFFSET})\
-            - (${CONFIG_SRAM_BASE_ADDRESS} + ${CONFIG_SRAM_OFFSET})"
-      )
+      if(CONFIG_SRAM_DEPRECATED_KCONFIG_SET)
+        math(EXPR KERNEL_MEM_VM_OFFSET
+          "(${CONFIG_KERNEL_VM_BASE} + ${CONFIG_KERNEL_VM_OFFSET}) \
+           - (${CONFIG_SRAM_BASE_ADDRESS} + ${CONFIG_SRAM_OFFSET})"
+        )
+      else()
+        dt_chosen(chosen_sram_path PROPERTY "zephyr,sram")
+        dt_reg_addr(ram_addr PATH "${chosen_sram_path}")
+
+        math(EXPR KERNEL_MEM_VM_OFFSET
+          "(${CONFIG_KERNEL_VM_BASE} + ${CONFIG_KERNEL_VM_OFFSET}) \
+           - (${ram_addr} + ${CONFIG_SRAM_OFFSET})"
+        )
+      endif()
 
       if(NOT (${KERNEL_MEM_VM_OFFSET} EQUAL 0))
         set(SECTION_VMA ${SECTION_KVMA})
@@ -5855,11 +6044,24 @@ function(add_llext_target target_name)
   set(llext_pkg_output ${LLEXT_OUTPUT})
   set(source_files ${LLEXT_SOURCES})
 
+  # Convert the LLEXT_REMOVE_FLAGS list to a regular expression, and use it to
+  # filter out these flags from the Zephyr target settings
+  list(TRANSFORM LLEXT_REMOVE_FLAGS
+       REPLACE "(.+)" "^\\1$"
+       OUTPUT_VARIABLE llext_remove_flags_regexp
+  )
+  list(JOIN llext_remove_flags_regexp "|" llext_remove_flags_regexp)
+  if("${llext_remove_flags_regexp}" STREQUAL "")
+    # an empty regexp would match anything, we actually need the opposite
+    # so set it to match empty strings
+    set(llext_remove_flags_regexp "^$")
+  endif()
   set(zephyr_flags
       "$<TARGET_PROPERTY:zephyr_interface,INTERFACE_COMPILE_OPTIONS>"
   )
-  llext_filter_zephyr_flags(LLEXT_REMOVE_FLAGS ${zephyr_flags}
-      zephyr_filtered_flags)
+  set(zephyr_filtered_flags
+      "$<FILTER:${zephyr_flags},EXCLUDE,${llext_remove_flags_regexp}>"
+  )
 
   # Compile the source file using current Zephyr settings but a different
   # set of flags to obtain the desired llext object type.
@@ -5990,6 +6192,10 @@ function(add_llext_target target_name)
             $<TARGET_PROPERTY:bintools,elfconvert_flag_strip_unneeded>
             $<TARGET_PROPERTY:bintools,elfconvert_flag_section_remove>.xt.*
             $<TARGET_PROPERTY:bintools,elfconvert_flag_section_remove>.xtensa.info
+            $<TARGET_PROPERTY:bintools,elfconvert_flag_section_remove>.ARM.exidx*
+            $<TARGET_PROPERTY:bintools,elfconvert_flag_section_remove>.rel.ARM.exidx*
+            $<TARGET_PROPERTY:bintools,elfconvert_flag_section_remove>.ARM.extab*
+            $<TARGET_PROPERTY:bintools,elfconvert_flag_section_remove>.rel.ARM.extab*
             $<TARGET_PROPERTY:bintools,elfconvert_flag_infile>${llext_pkg_input}
             $<TARGET_PROPERTY:bintools,elfconvert_flag_outfile>${llext_pkg_output}
             $<TARGET_PROPERTY:bintools,elfconvert_flag_final>
@@ -6094,38 +6300,6 @@ function(add_llext_command)
   )
 endfunction()
 
-# 7.3 llext helper functions
-
-# Usage:
-#   llext_filter_zephyr_flags(<filter> <flags> <outvar>)
-#
-# Filter out flags from a list of flags. The filter is a list of regular
-# expressions that will be used to exclude flags from the input list.
-#
-# The resulting generator expression will be stored in the variable <outvar>.
-#
-# Example:
-#   llext_filter_zephyr_flags(LLEXT_REMOVE_FLAGS zephyr_flags zephyr_filtered_flags)
-#
-function(llext_filter_zephyr_flags filter flags outvar)
-  list(TRANSFORM ${filter}
-       REPLACE "(.+)" "^\\1$"
-       OUTPUT_VARIABLE llext_remove_flags_regexp
-  )
-  list(JOIN llext_remove_flags_regexp "|" llext_remove_flags_regexp)
-  if("${llext_remove_flags_regexp}" STREQUAL "")
-    # an empty regexp would match anything, we actually need the opposite
-    # so set it to match empty strings
-    set(llext_remove_flags_regexp "^$")
-  endif()
-
-  set(zephyr_filtered_flags
-      "$<FILTER:${flags},EXCLUDE,${llext_remove_flags_regexp}>"
-  )
-
-  set(${outvar} ${zephyr_filtered_flags} PARENT_SCOPE)
-endfunction()
-
 ########################################################
 # 8. Script mode handling
 ########################################################
@@ -6154,13 +6328,5 @@ if(CMAKE_SCRIPT_MODE_FILE)
 
   function(set_target_properties)
     # This silence the error: 'set_target_properties command is not scriptable'
-  endfunction()
-
-  # Build info creates a custom target for handling of build info.
-  # build_info is not needed in script mode but still called by Zephyr CMake
-  # modules. Therefore disable build_info(...) in when including
-  # extensions.cmake in script mode.
-  function(build_info)
-    # This silence the error: 'Unknown CMake command "yaml_context"'
   endfunction()
 endif()

@@ -6,7 +6,7 @@
  */
 
 #include <zephyr/drivers/can.h>
-#include <zephyr/drivers/can/can_mcan.h>
+#include "can_mcan.h"
 #include <zephyr/drivers/can/transceiver.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
@@ -950,7 +950,7 @@ int can_mcan_send(const struct device *dev, const struct can_frame *frame, k_tim
 #endif /* !CONFIG_CAN_FD_MODE */
 		.efc = 1U,
 	};
-	uint32_t put_idx = -1;
+	uint32_t put_idx = UINT32_MAX;
 	uint32_t reg;
 	int err;
 
@@ -1025,6 +1025,8 @@ int can_mcan_send(const struct device *dev, const struct can_frame *frame, k_tim
 		}
 	}
 
+	/* A free TX buffer should always be available since the data->tx_sem was acquired */
+	__ASSERT_NO_MSG(put_idx < cbs->num_tx);
 	tx_hdr.mm = put_idx;
 
 	if ((frame->flags & CAN_FRAME_IDE) != 0U) {
@@ -1053,7 +1055,6 @@ int can_mcan_send(const struct device *dev, const struct can_frame *frame, k_tim
 		}
 	}
 
-	__ASSERT_NO_MSG(put_idx < cbs->num_tx);
 	cbs->tx[put_idx].function = callback;
 	cbs->tx[put_idx].user_data = user_data;
 
@@ -1119,24 +1120,24 @@ int can_mcan_add_rx_filter_std(const struct device *dev, can_rx_callback_t callb
 		return -ENOSPC;
 	}
 
-	/* TODO proper fifo balancing */
-	filter_element.sfec = filter_id & 0x01 ? CAN_MCAN_XFEC_FIFO1 : CAN_MCAN_XFEC_FIFO0;
+	/* Always use FIFO0 to ensure frames are delivered to callbacks in the order received */
+	filter_element.sfec = CAN_MCAN_XFEC_FIFO0;
 
 	err = can_mcan_write_mram(dev, config->mram_offsets[CAN_MCAN_MRAM_CFG_STD_FILTER] +
 				  filter_id * sizeof(struct can_mcan_std_filter),
 				  &filter_element, sizeof(filter_element));
 	if (err != 0) {
 		LOG_ERR("failed to write std filter element (err %d)", err);
+		k_mutex_unlock(&data->lock);
 		return err;
 	}
 
-	k_mutex_unlock(&data->lock);
-
-	LOG_DBG("Attached std filter at %d", filter_id);
-
-	__ASSERT_NO_MSG(filter_id < cbs->num_std);
 	cbs->std[filter_id].function = callback;
 	cbs->std[filter_id].user_data = user_data;
+
+	k_mutex_unlock(&data->lock);
+
+	LOG_DBG("added std filter at index %d", filter_id);
 
 	return filter_id;
 }
@@ -1170,24 +1171,24 @@ static int can_mcan_add_rx_filter_ext(const struct device *dev, can_rx_callback_
 		return -ENOSPC;
 	}
 
-	/* TODO proper fifo balancing */
-	filter_element.efec = filter_id & 0x01 ? CAN_MCAN_XFEC_FIFO1 : CAN_MCAN_XFEC_FIFO0;
+	/* Always use FIFO0 to ensure frames are delivered to callbacks in the order received */
+	filter_element.efec = CAN_MCAN_XFEC_FIFO0;
 
 	err = can_mcan_write_mram(dev, config->mram_offsets[CAN_MCAN_MRAM_CFG_EXT_FILTER] +
 				  filter_id * sizeof(struct can_mcan_ext_filter),
 				  &filter_element, sizeof(filter_element));
 	if (err != 0) {
 		LOG_ERR("failed to write std filter element (err %d)", err);
+		k_mutex_unlock(&data->lock);
 		return err;
 	}
 
-	k_mutex_unlock(&data->lock);
-
-	LOG_DBG("Attached ext filter at %d", filter_id);
-
-	__ASSERT_NO_MSG(filter_id < cbs->num_ext);
 	cbs->ext[filter_id].function = callback;
 	cbs->ext[filter_id].user_data = user_data;
+
+	k_mutex_unlock(&data->lock);
+
+	LOG_DBG("added ext filter at index %d", filter_id);
 
 	return filter_id;
 }
@@ -1225,7 +1226,7 @@ void can_mcan_remove_rx_filter(const struct device *dev, int filter_id)
 	struct can_mcan_data *data = dev->data;
 	int err;
 
-	if (filter_id < 0) {
+	if (filter_id < 0 || filter_id >= (cbs->num_std + cbs->num_ext)) {
 		LOG_ERR("filter ID %d out of bounds", filter_id);
 		return;
 	}
@@ -1234,11 +1235,6 @@ void can_mcan_remove_rx_filter(const struct device *dev, int filter_id)
 
 	if (filter_id >= cbs->num_std) {
 		filter_id -= cbs->num_std;
-		if (filter_id >= cbs->num_ext) {
-			LOG_ERR("filter ID %d out of bounds", filter_id);
-			k_mutex_unlock(&data->lock);
-			return;
-		}
 
 		cbs->ext[filter_id].function = NULL;
 		cbs->ext[filter_id].user_data = NULL;
@@ -1421,12 +1417,10 @@ int can_mcan_init(const struct device *dev)
 	__ASSERT_NO_MSG(cbs->num_std <= config->mram_elements[CAN_MCAN_MRAM_CFG_STD_FILTER]);
 	__ASSERT_NO_MSG(cbs->num_ext <= config->mram_elements[CAN_MCAN_MRAM_CFG_EXT_FILTER]);
 
-	k_mutex_init(&data->lock);
-	k_mutex_init(&data->tx_mtx);
 	k_sem_init(&data->tx_sem, cbs->num_tx, cbs->num_tx);
 
 	if (config->common.phy != NULL && !device_is_ready(config->common.phy)) {
-		LOG_ERR("CAN transceiver not ready");
+		LOG_ERR_DEVICE_NOT_READY(config->common.phy);
 		return -ENODEV;
 	}
 
@@ -1465,6 +1459,23 @@ int can_mcan_init(const struct device *dev)
 		 CAN_MCAN_CCCR_ASM);
 
 	err = can_mcan_write_reg(dev, CAN_MCAN_CCCR, reg);
+	if (err != 0) {
+		return err;
+	}
+
+#ifdef CONFIG_CAN_RX_TIMESTAMP
+	/*
+	 * Enable the internal timestamp counter by default. SoC-specific driver frontends can
+	 * overwrite this if configured for using a SoC-specific, external timestamp counter.
+	 */
+	reg = FIELD_PREP(CAN_MCAN_TSCC_TCP, config->timestamp_prescaler - 1U) |
+		FIELD_PREP(CAN_MCAN_TSCC_TSS, 1U);
+#else /* CONFIG_CAN_RX_TIMESTAMP */
+	/* Disable timestamp counter */
+	reg = 0U;
+#endif /* !CONFIG_CAN_RX_TIMESTAMP */
+
+	err = can_mcan_write_reg(dev, CAN_MCAN_TSCC, reg);
 	if (err != 0) {
 		return err;
 	}

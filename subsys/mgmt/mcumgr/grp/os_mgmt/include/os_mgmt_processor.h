@@ -17,7 +17,9 @@ extern "C" {
  * (List extracted from /cmake/gcc-m-cpu.cmake)
  */
 #if defined(CONFIG_ARM)
-#if defined(CONFIG_CPU_CORTEX_M0)
+#if defined(CONFIG_CPU_ARM926EJ_S)
+#define PROCESSOR_NAME "arm926ej-s"
+#elif defined(CONFIG_CPU_CORTEX_M0)
 #define PROCESSOR_NAME "cortex-m0"
 #elif defined(CONFIG_CPU_CORTEX_M0PLUS)
 #define PROCESSOR_NAME "cortex-m0plus"
@@ -117,6 +119,8 @@ extern "C" {
 #define PROCESSOR_NAME "cortex-a7"
 #elif defined(CONFIG_CPU_CORTEX_A9)
 #define PROCESSOR_NAME "cortex-a9"
+#elif defined(CONFIG_CPU_CORTEX_A32)
+#define PROCESSOR_NAME "cortex-a32"
 #endif
 #elif defined(CONFIG_ARM64)
 #if defined(CONFIG_CPU_CORTEX_A53)
@@ -182,6 +186,24 @@ extern "C" {
 #define PROCESSOR_NAME "xtensa"
 #elif defined(CONFIG_SPARC)
 #define PROCESSOR_NAME "sparc"
+#elif defined(CONFIG_OPENRISC)
+#define PROCESSOR_NAME "openrisc"
+#endif
+
+#if defined(CONFIG_ARCH_POSIX)
+#if defined(PROCESSOR_NAME)
+#error "Processor name already selected; compile-time check should be removed."
+#endif
+
+#if defined(__x86_64__)
+#define PROCESSOR_NAME "x86_64"
+#elif defined(__i386__)
+#define PROCESSOR_NAME "x86"
+#elif defined(__aarch64__)
+#define PROCESSOR_NAME "aarch64"
+#elif defined(__arm__)
+#define PROCESSOR_NAME "arm"
+#endif
 #endif
 
 #ifndef PROCESSOR_NAME

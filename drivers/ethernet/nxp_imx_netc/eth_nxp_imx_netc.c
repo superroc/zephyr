@@ -56,7 +56,7 @@ static void netc_eth_pkt_get_timestamp(struct net_pkt *pkt, const struct device 
 	pkt->timestamp.second = time_ns / NSEC_PER_SEC;
 }
 
-const struct device *netc_eth_get_ptp_clock(const struct device *dev)
+const struct device *netc_eth_get_ptp_clock(const struct device *dev, struct net_if *iface __unused)
 {
 	const struct netc_eth_config *cfg = dev->config;
 
@@ -184,7 +184,7 @@ static int netc_eth_rx(const struct device *dev)
 
 #ifdef NETC_PTP_TIMESTAMPING_SUPPORT
 	if (attr.isTsAvail) {
-		const struct device *ptp_dev = netc_eth_get_ptp_clock(dev);
+		const struct device *ptp_dev = netc_eth_get_ptp_clock(dev, data->iface);
 
 #if defined(NETC_SWITCH_NO_TAG_DRIVER_SUPPORT)
 		if (ctx->dsa_port == DSA_CONDUIT_PORT) {
@@ -301,7 +301,7 @@ int netc_eth_init_common(const struct device *dev)
 	config->bdr_init(&bdr_config, &rx_bdr_config, &tx_bdr_config);
 
 #ifdef NETC_PTP_TIMESTAMPING_SUPPORT
-	if (netc_eth_get_ptp_clock(dev) != NULL) {
+	if (netc_eth_get_ptp_clock(dev, data->iface) != NULL) {
 		bdr_config.rxBdrConfig[0].extendDescEn = true;
 	}
 
@@ -422,8 +422,6 @@ int netc_eth_init_common(const struct device *dev)
 	EP_MsixSetEntryMask(&data->handle, NETC_TX_MSIX_ENTRY_IDX, false);
 	EP_MsixSetEntryMask(&data->handle, NETC_RX_MSIX_ENTRY_IDX, false);
 
-	k_mutex_init(&data->tx_mutex);
-
 	k_sem_init(&data->rx_sem, 0, 1);
 	k_thread_create(&data->rx_thread, data->rx_thread_stack,
 			K_KERNEL_STACK_SIZEOF(data->rx_thread_stack), netc_eth_rx_thread,
@@ -480,12 +478,10 @@ int netc_eth_tx(const struct device *dev, struct net_pkt *pkt)
 	}
 #endif
 
-	k_mutex_lock(&data->tx_mutex, K_FOREVER);
-
 #ifdef NETC_PTP_TIMESTAMPING_SUPPORT
 	pkt_is_gptp = net_ntohs(NET_ETH_HDR(pkt)->type) == NET_ETH_PTYPE_PTP;
 	if ((pkt_is_gptp || net_pkt_is_tx_timestamping(pkt)) &&
-	    (netc_eth_get_ptp_clock(dev) != NULL)) {
+	    (netc_eth_get_ptp_clock(dev, data->iface) != NULL)) {
 		opt.flags |= kEP_TX_OPT_REQ_TS;
 	}
 #endif
@@ -562,20 +558,16 @@ int netc_eth_tx(const struct device *dev, struct net_pkt *pkt)
 
 	ret = 0;
 error:
-	k_mutex_unlock(&data->tx_mutex);
-
-	if (ret != 0) {
-		eth_stats_update_errors_tx(iface_dst);
-	}
 	return ret;
 }
 
-enum ethernet_hw_caps netc_eth_get_capabilities(const struct device *dev)
+enum ethernet_hw_caps netc_eth_get_capabilities(const struct device *dev __maybe_unused,
+						struct net_if *iface __maybe_unused)
 {
 	uint32_t caps;
 
 	caps = (ETHERNET_LINK_10BASE | ETHERNET_LINK_100BASE | ETHERNET_LINK_1000BASE |
-		ETHERNET_HW_RX_CHKSUM_OFFLOAD | ETHERNET_HW_FILTERING
+		ETHERNET_HW_RX_CHKSUM_OFFLOAD
 #if defined(CONFIG_NET_VLAN)
 		| ETHERNET_HW_VLAN
 #endif
@@ -585,15 +577,15 @@ enum ethernet_hw_caps netc_eth_get_capabilities(const struct device *dev)
 	);
 
 #if defined(NETC_PTP_TIMESTAMPING_SUPPORT)
-	if (netc_eth_get_ptp_clock(dev) != NULL) {
+	if (netc_eth_get_ptp_clock(dev, iface) != NULL) {
 		caps |= ETHERNET_PTP;
 	}
 #endif
 	return caps;
 }
 
-int netc_eth_set_config(const struct device *dev, enum ethernet_config_type type,
-			const struct ethernet_config *config)
+int netc_eth_set_config(const struct device *dev, struct net_if *iface __unused,
+			enum ethernet_config_type type, const struct ethernet_config *config)
 {
 	struct netc_eth_data *data = dev->data;
 	const struct netc_eth_config *cfg = dev->config;
@@ -610,8 +602,6 @@ int netc_eth_set_config(const struct device *dev, enum ethernet_config_type type
 			ret = -ENOTSUP;
 			break;
 		}
-		net_if_set_link_addr(data->iface, data->mac_addr, sizeof(data->mac_addr),
-				     NET_LINK_ETHERNET);
 		LOG_INF("SI%d MAC set to: %02x:%02x:%02x:%02x:%02x:%02x", getSiIdx(cfg->si_idx),
 			data->mac_addr[0], data->mac_addr[1], data->mac_addr[2], data->mac_addr[3],
 			data->mac_addr[4], data->mac_addr[5]);

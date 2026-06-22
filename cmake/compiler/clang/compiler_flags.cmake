@@ -3,6 +3,15 @@ include(${ZEPHYR_BASE}/cmake/compiler/gcc/compiler_flags.cmake)
 
 # Now, let's overwrite the flags that are different in clang.
 
+set_property(TARGET compiler-cpp PROPERTY dialect_cpp2a "-std=c++2a"
+  "-Wno-register" "-Wno-deprecated-volatile")
+set_property(TARGET compiler-cpp PROPERTY dialect_cpp20 "-std=c++20"
+  "-Wno-register" "-Wno-deprecated-volatile")
+set_property(TARGET compiler-cpp PROPERTY dialect_cpp2b "-std=c++2b"
+  "-Wno-register" "-Wno-deprecated-volatile")
+set_property(TARGET compiler-cpp PROPERTY dialect_cpp23 "-std=c++23"
+  "-Wno-register" "-Wno-deprecated-volatile")
+
 ########################################################
 # Setting compiler properties for gcc / g++ compilers. #
 ########################################################
@@ -12,6 +21,11 @@ include(${ZEPHYR_BASE}/cmake/compiler/gcc/compiler_flags.cmake)
 #####################################################
 
 set_compiler_property(PROPERTY optimization_fast -O3 -ffast-math)
+
+# Clang uses -flto=thin (parallel) and -flto=full (single-threaded) instead
+# of the GCC-specific -flto=auto and -flto=1 forms.
+set_compiler_property(PROPERTY optimization_lto -flto=thin)
+set_compiler_property(PROPERTY optimization_lto_st -flto=full)
 
 #######################################################
 # This section covers flags related to warning levels #
@@ -140,6 +154,18 @@ set_compiler_property(PROPERTY diagnostic -fcolor-diagnostics)
 # clang flag to disable macro backtrace in diagnostics (can't fully disable it, so limit to 1)
 set_compiler_property(PROPERTY no_track_macro_expansion "-fmacro-backtrace-limit=1")
 
-set_compiler_property(PROPERTY no_global_merge "-mno-global-merge")
+if(CONFIG_RISCV)
+  set_compiler_property(PROPERTY no_global_merge "")
+else()
+  set_compiler_property(PROPERTY no_global_merge "-mno-global-merge")
+endif()
 
 set_compiler_property(PROPERTY specs)
+
+# Clang doesn't support -mstack-protector-guard flags. Override the properties
+# inherited from GCC to only include the base -fstack-protector variants.
+set_compiler_property(PROPERTY security_canaries -fstack-protector)
+set_compiler_property(PROPERTY security_canaries_strong -fstack-protector-strong)
+set_compiler_property(PROPERTY security_canaries_all -fstack-protector-all)
+set_compiler_property(PROPERTY security_canaries_explicit -fstack-protector-explicit)
+set_compiler_property(PROPERTY security_canaries_global)

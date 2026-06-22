@@ -115,9 +115,10 @@ static bool pwm_period_check_and_set(const struct device *dev,
 
 	/* If any other channel is driven by the PWM peripheral, the period
 	 * that is currently set cannot be changed, as this would influence
-	 * the output for that channel.
+	 * the output for that channel, unless previous period was set to 0
+	 * for 100% duty cycle.
 	 */
-	if ((data->pwm_needed & ~BIT(channel)) != 0) {
+	if (((data->pwm_needed & ~BIT(channel)) != 0) && (data->period_cycles != 0)) {
 		LOG_ERR("Incompatible period.");
 		return false;
 	}
@@ -354,7 +355,11 @@ static int pwm_suspend(const struct device *dev)
 	while (!nrfx_pwm_stopped_check(&data->pwm)) {
 	}
 
-	memset(dev->data, 0, sizeof(struct pwm_nrfx_data));
+	/* Explicitly clear driver state that might be invalid after subsequent resume. */
+	data->period_cycles = 0;
+	data->pwm_needed = 0;
+	data->prescaler = 0;
+	data->stop_requested = false;
 	(void)pinctrl_apply_state(config->pcfg, PINCTRL_STATE_SLEEP);
 
 	return 0;

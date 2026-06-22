@@ -82,6 +82,7 @@
 
 #include <zephyr/logging/log.h>
 #include <zephyr/device.h>
+#include <zephyr/sys/barrier.h>
 #include <zephyr/sys/bitarray.h>
 #include <zephyr/ipc/icmsg.h>
 #include <zephyr/ipc/ipc_service_backend.h>
@@ -267,7 +268,7 @@ static uint8_t *buffer_from_index_validate(const struct channel_config *ch_conf,
 	if (size != NULL) {
 		if (invalidate_cache) {
 			sys_cache_data_invd_range(block, BLOCK_HEADER_SIZE);
-			__sync_synchronize();
+			barrier_sync_synchronize();
 		}
 		allocable_size = ch_conf->block_count * ch_conf->block_size;
 		end_ptr = ch_conf->blocks_ptr + allocable_size;
@@ -282,7 +283,7 @@ static uint8_t *buffer_from_index_validate(const struct channel_config *ch_conf,
 		*size = buffer_size;
 		if (invalidate_cache) {
 			sys_cache_data_invd_range(block->data, buffer_size);
-			__sync_synchronize();
+			barrier_sync_synchronize();
 		}
 	}
 
@@ -587,7 +588,7 @@ static int send_block(struct backend_data *dev_data, enum msg_type msg_type,
 	block = block_from_index(&dev_data->conf->tx, tx_block_index);
 
 	block->header.size = size;
-	__sync_synchronize();
+	barrier_sync_synchronize();
 	sys_cache_data_flush_range(block, size + BLOCK_HEADER_SIZE);
 
 	r = send_control_message(dev_data, msg_type, ept_addr, tx_block_index);
@@ -1029,6 +1030,10 @@ static int open(const struct device *instance)
 		.error = NULL,
 	};
 
+	if (!device_is_ready(instance)) {
+		return -EAGAIN;
+	}
+
 	LOG_DBG("Open instance 0x%08X, initiator=%d", (uint32_t)instance,
 		dev_data->is_initiator ? 1 : 0);
 	LOG_DBG("  TX %d blocks of %d bytes at 0x%08X, max allocable %d bytes",
@@ -1046,6 +1051,43 @@ static int open(const struct device *instance)
 
 	return icmsg_open(&conf->control_config, &dev_data->control_data, &cb,
 			  (void *)instance);
+}
+
+/**
+ * Close the backend instance callback.
+ */
+static int close(const struct device *instance)
+{
+	const struct icbmsg_config *conf = instance->config;
+	struct backend_data *dev_data = instance->data;
+	struct ept_data *ept = NULL;
+	int ept_index;
+	int ret = 0;
+
+	ret = icmsg_close(&conf->control_config, &dev_data->control_data);
+	if (ret) {
+		return ret;
+	}
+
+#ifdef CONFIG_MULTITHREADING
+	(void)k_work_cancel(&dev_data->ep_bound_work);
+#endif
+
+	for (ept_index = 0; ept_index < NUM_EPT; ept_index++) {
+		ept = &dev_data->ept[ept_index];
+		ept->cfg = NULL;
+		atomic_set(&ept->state, EPT_UNCONFIGURED);
+		atomic_set(&ept->rebound_state, EPT_NORMAL);
+		ept->addr = EPT_ADDR_INVALID;
+	}
+	atomic_clear(&dev_data->flags);
+	memset(&dev_data->waiting_bound, 0xFF, sizeof(dev_data->waiting_bound));
+	memset(&dev_data->ept_map, EPT_ADDR_INVALID, sizeof(dev_data->ept_map));
+
+	(void)sys_bitarray_clear_region(conf->tx_usage_bitmap, conf->tx_usage_bitmap->num_bits, 0);
+	(void)sys_bitarray_clear_region(conf->rx_hold_bitmap, conf->rx_hold_bitmap->num_bits, 0);
+
+	return 0;
 }
 
 /**
@@ -1290,7 +1332,7 @@ static int backend_init(const struct device *instance)
  */
 const static struct ipc_service_backend backend_ops = {
 	.open_instance = open,
-	.close_instance = NULL, /* not implemented */
+	.close_instance = close,
 	.send = send,
 	.register_endpoint = register_ept,
 	.deregister_endpoint = deregister_ept,

@@ -18,8 +18,6 @@ LOG_MODULE_REGISTER(eth_adin2111, CONFIG_ETHERNET_LOG_LEVEL);
 #include <errno.h>
 
 #include <zephyr/net/net_if.h>
-#include <zephyr/net/ethernet.h>
-#include <zephyr/net/phy.h>
 #include <zephyr/drivers/ethernet/eth_adin2111.h>
 
 #include "phy/phy_adin2111_priv.h"
@@ -89,8 +87,8 @@ int eth_adin2111_mac_reset(const struct device *dev)
 	return 0;
 }
 
-int eth_adin2111_reg_update(const struct device *dev, const uint16_t reg,
-			    uint32_t mask,  uint32_t data)
+__maybe_unused static int eth_adin2111_reg_update(const struct device *dev, const uint16_t reg,
+						  uint32_t mask, uint32_t data)
 {
 	uint32_t val;
 	int ret;
@@ -312,6 +310,13 @@ int eth_adin2111_oa_data_read(const struct device *dev, const uint16_t port_idx)
 		len = (ftr & ADIN2111_OA_DATA_FTR_EV) ?
 		       ((ftr & ADIN2111_OA_DATA_FTR_EBO_MSK) >> ADIN2111_OA_DATA_FTR_EBO) + 1 :
 		       ctx->oa_cps;
+
+		if (ctx->scur + len > CONFIG_ETH_ADIN2111_BUFFER_SIZE) {
+			ctx->scur = 0;
+			LOG_ERR("OA RX: Frame is larger than maximum size !");
+			goto update_pos;
+		}
+
 		memcpy(&ctx->buf[ctx->scur], &ctx->oa_rx_buf[rx_pos], len);
 		ctx->scur += len;
 
@@ -320,7 +325,7 @@ int eth_adin2111_oa_data_read(const struct device *dev, const uint16_t port_idx)
 							   NET_AF_UNSPEC, 0,
 							   K_MSEC(CONFIG_ETH_ADIN2111_TIMEOUT));
 			if (!pkt) {
-				LOG_ERR("OA RX: cannot allcate packet space, skipping.");
+				LOG_ERR("OA RX: cannot allocate packet space, skipping.");
 				return -ENOMEM;
 			}
 			/* Skipping CRC32 */
@@ -651,11 +656,7 @@ static inline void adin2111_port_on_phyint(const struct device *dev)
 		return;
 	}
 
-	if (state.is_up) {
-		net_eth_carrier_on(data->iface);
-	} else {
-		net_eth_carrier_off(data->iface);
-	}
+	net_eth_carrier_set(data->iface, state.is_up);
 }
 
 static void adin2111_offload_thread(void *p1, void *p2, void *p3)
@@ -846,7 +847,6 @@ static int adin2111_port_send(const struct device *dev, struct net_pkt *pkt)
 	/* query remaining tx fifo space */
 	ret = adin2111_read_tx_space(adin, &tx_space);
 	if (ret < 0) {
-		eth_stats_update_errors_tx(data->iface);
 		LOG_ERR("Failed to read TX FIFO space, %d", ret);
 		goto end_unlock;
 	}
@@ -858,7 +858,6 @@ static int adin2111_port_send(const struct device *dev, struct net_pkt *pkt)
 	if (tx_space <
 	   (pkt_len + ADIN2111_FRAME_HEADER_SIZE + ADIN2111_INTERNAL_HEADER_SIZE)) {
 		/* tx buffer is full */
-		eth_stats_update_errors_tx(data->iface);
 		ret = -EBUSY;
 		goto end_unlock;
 	}
@@ -879,7 +878,6 @@ static int adin2111_port_send(const struct device *dev, struct net_pkt *pkt)
 	burst_size = ROUND_UP(padded_size, 4);
 	if ((burst_size + ADIN2111_WRITE_HEADER_SIZE) > CONFIG_ETH_ADIN2111_BUFFER_SIZE) {
 		ret = -ENOMEM;
-		eth_stats_update_errors_tx(data->iface);
 		goto end_unlock;
 	}
 
@@ -901,7 +899,6 @@ static int adin2111_port_send(const struct device *dev, struct net_pkt *pkt)
 			   (ctx->buf + header_size + ADIN2111_FRAME_HEADER_SIZE),
 			   pkt_len);
 	if (ret < 0) {
-		eth_stats_update_errors_tx(data->iface);
 		LOG_ERR("Port %u failed to read PKT into TX buffer, %d",
 			cfg->port_idx, ret);
 		goto end_unlock;
@@ -910,7 +907,6 @@ static int adin2111_port_send(const struct device *dev, struct net_pkt *pkt)
 	/* write transmit size */
 	ret = eth_adin2111_reg_write(adin, ADIN2111_TX_FSIZE, padded_size);
 	if (ret < 0) {
-		eth_stats_update_errors_tx(data->iface);
 		LOG_ERR("Port %u write FSIZE failed, %d", cfg->port_idx, ret);
 		goto end_unlock;
 	}
@@ -926,13 +922,8 @@ static int adin2111_port_send(const struct device *dev, struct net_pkt *pkt)
 			   &tx);
 end_check:
 	if (ret < 0) {
-		eth_stats_update_errors_tx(data->iface);
 		LOG_ERR("Port %u frame SPI write failed, %d", cfg->port_idx, ret);
-		goto end_unlock;
 	}
-
-	eth_stats_update_bytes_tx(data->iface, pkt_len);
-	eth_stats_update_pkts_tx(data->iface);
 
 end_unlock:
 	eth_adin2111_unlock(adin);
@@ -1218,9 +1209,9 @@ static void adin2111_port_iface_init(struct net_if *iface)
 	}
 }
 
-static enum ethernet_hw_caps adin2111_port_get_capabilities(const struct device *dev)
+static enum ethernet_hw_caps adin2111_port_get_capabilities(const struct device *dev __unused,
+							    struct net_if *iface __unused)
 {
-	ARG_UNUSED(dev);
 	return ETHERNET_LINK_10BASE |
 		ETHERNET_HW_FILTERING
 #if defined(CONFIG_NET_LLDP)
@@ -1230,6 +1221,7 @@ static enum ethernet_hw_caps adin2111_port_get_capabilities(const struct device 
 }
 
 static int adin2111_port_set_config(const struct device *dev,
+				    struct net_if *iface __unused,
 				    enum ethernet_config_type type,
 				    const struct ethernet_config *config)
 {
@@ -1247,10 +1239,7 @@ static int adin2111_port_set_config(const struct device *dev,
 			goto end_unlock;
 		}
 
-		(void)memcpy(data->mac_addr, config->mac_address.addr, sizeof(data->mac_addr));
-
-		(void)net_if_set_link_addr(data->iface, data->mac_addr, sizeof(data->mac_addr),
-					   NET_LINK_ETHERNET);
+		memcpy(data->mac_addr, config->mac_address.addr, sizeof(data->mac_addr));
 	}
 
 	if (type == ETHERNET_CONFIG_TYPE_FILTER) {
@@ -1278,7 +1267,8 @@ end_unlock:
 }
 
 #if defined(CONFIG_NET_STATISTICS_ETHERNET)
-static struct net_stats_eth *adin2111_port_get_stats(const struct device *dev)
+static struct net_stats_eth *adin2111_port_get_stats(const struct device *dev,
+						     struct net_if *iface __unused)
 {
 	struct adin2111_port_data *data = dev->data;
 

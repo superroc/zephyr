@@ -319,12 +319,6 @@ static void uart_rz_scif_irq_callback_set(const struct device *dev,
 	data->callback_data = cb_data;
 }
 
-static int uart_rz_scif_irq_update(const struct device *dev)
-{
-	ARG_UNUSED(dev);
-	return 1;
-}
-
 static void uart_rz_scif_rxi_isr(const struct device *dev)
 {
 	struct uart_rz_scif_data *data = dev->data;
@@ -424,7 +418,6 @@ static DEVICE_API(uart, uart_rz_scif_driver_api) = {
 	.irq_rx_ready = uart_rz_scif_irq_rx_ready,
 	.irq_is_pending = uart_rz_scif_irq_is_pending,
 	.irq_callback_set = uart_rz_scif_irq_callback_set,
-	.irq_update = uart_rz_scif_irq_update,
 #endif /* CONFIG_UART_INTERRUPT_DRIVEN */
 };
 
@@ -492,6 +485,7 @@ static int uart_rz_scif_init(const struct device *dev)
 				.de_control_pin =                                                  \
 					(bsp_io_port_pin_t)SCIF_UART_INVALID_16BIT_PARAM,          \
 			},                                                                         \
+		.p_reg = (void *)DT_INST_REG_ADDR(n),                                              \
 	};                                                                                         \
 	static uart_cfg_t g_uart##n##_cfg = {                                                      \
 		.channel = DT_INST_PROP(n, channel),                                               \

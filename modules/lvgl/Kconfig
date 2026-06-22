@@ -46,6 +46,9 @@ config LV_LOG_LEVEL_USER
 config LV_LOG_LEVEL_TRACE
 	bool
 
+config LV_ATTRIBUTE_MEM_ALIGN_SIZE
+	int
+
 config LV_Z_LOG_LEVEL
 	int
 	default 0 if LV_LOG_LEVEL_NONE || !LV_USE_LOG
@@ -97,11 +100,6 @@ config LV_COLOR_16_SWAP
 config LV_Z_COLOR_MONO_HW_INVERSION
 	bool "Hardware pixel inversion (disables software pixel inversion)."
 	depends on LV_COLOR_DEPTH_1
-
-config LV_Z_COLOR_24_BGR_TO_RGB
-	bool "Convert BGR888 to RGB888 color before flushing"
-	default y
-	depends on LV_COLOR_DEPTH_24
 
 config LV_Z_FLUSH_THREAD
 	bool "Flush LVGL frames in a separate thread"
@@ -198,10 +196,13 @@ config LV_DRAW_DMA2D_HAL_INCLUDE
 	  Must be defined to include path of CMSIS header of target processor
 	  e.g. "stm32f769xx.h" or "stm32f429xx.h"
 
+config LV_USE_DRAW_DAVE2D
+	bool
+	imply RENESAS_DRW
+
 config LV_Z_USE_OSAL
 	bool "Use OSAL enabling parallel rendering"
 	depends on DYNAMIC_THREAD
-	select LV_USE_PRIVATE_API
 	help
 	  Use the Zephyr LVGL OSAL to enable parallel rendering
 	  pipelines.

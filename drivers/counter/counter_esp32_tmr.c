@@ -1,15 +1,19 @@
 /*
- * Copyright (c) 2024-2025 Espressif Systems (Shanghai) Co., Ltd.
+ * Copyright (c) 2024-2026 Espressif Systems (Shanghai) Co., Ltd.
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 
 #define DT_DRV_COMPAT espressif_esp32_counter
 
+#include <esp_attr.h>
+#include <esp_rom_sys.h>
 #include <esp_clk_tree.h>
-#include <driver/timer_types_legacy.h>
+#include <esp_private/esp_clk_tree_common.h>
 #include <hal/timer_hal.h>
 #include <hal/timer_ll.h>
+#include <hal/timer_types.h>
+#include <hal/timg_ll.h>
 
 #include <zephyr/drivers/counter.h>
 #include <zephyr/drivers/clock_control.h>
@@ -17,6 +21,17 @@
 #include <zephyr/drivers/interrupt_controller/intc_esp32.h>
 #include <zephyr/device.h>
 #include <zephyr/logging/log.h>
+
+#if CONFIG_ESP32_PM_POWER_DOWN_PERIPHERAL_IN_LIGHT_SLEEP && SOC_TIMER_SUPPORT_SLEEP_RETENTION
+#define COUNTER_SLEEP_RETENTION_ENABLED 1
+#else
+#define COUNTER_SLEEP_RETENTION_ENABLED 0
+#endif
+
+#if COUNTER_SLEEP_RETENTION_ENABLED
+#include <hal/timer_periph.h>
+#include <esp_private/sleep_retention.h>
+#endif
 
 LOG_MODULE_REGISTER(esp32_counter, CONFIG_COUNTER_LOG_LEVEL);
 
@@ -26,31 +41,69 @@ typedef bool (*timer_isr_t)(void *);
 
 struct counter_esp32_top_data {
 	counter_top_callback_t callback;
-	uint32_t ticks;
+	uint64_t ticks;
 	void *user_data;
 	bool auto_reload;
-	uint32_t guard_period;
+	uint64_t guard_period;
 };
 
 struct counter_esp32_config {
 	struct counter_config_info counter_info;
-	timer_config_t config;
 	const struct device *clock_dev;
 	const clock_control_subsys_t clock_subsys;
-	timer_group_t group;
-	timer_idx_t index;
+	uint32_t group;
+	uint32_t index;
+	uint32_t prescaler;
 	int irq_source;
 	int irq_priority;
 	int irq_flags;
 };
 
 struct counter_esp32_data {
-	struct counter_alarm_cfg alarm_cfg;
+	struct counter_alarm_cfg_64 alarm_cfg;
+	counter_alarm_callback_t alarm_callback_32;
 	struct counter_esp32_top_data top_data;
-	uint32_t ticks;
+	uint64_t ticks;
 	uint32_t clock_src_hz;
 	timer_hal_context_t hal_ctx;
 };
+
+#if COUNTER_SLEEP_RETENTION_ENABLED
+static esp_err_t counter_esp32_create_sleep_retention_cb(void *arg)
+{
+	const struct device *dev = arg;
+	const struct counter_esp32_config *cfg = dev->config;
+
+	return sleep_retention_entries_create(
+		soc_timg_gptimer_retention_infos[cfg->group][cfg->index].regdma_entry_array,
+		soc_timg_gptimer_retention_infos[cfg->group][cfg->index].array_size,
+		REGDMA_LINK_PRI_GPTIMER,
+		soc_timg_gptimer_retention_infos[cfg->group][cfg->index].module);
+}
+
+static void counter_esp32_sleep_retention_init(const struct device *dev)
+{
+	const struct counter_esp32_config *cfg = dev->config;
+	const soc_timg_gptimer_retention_desc_t *info =
+		&soc_timg_gptimer_retention_infos[cfg->group][cfg->index];
+
+	sleep_retention_module_init_param_t init_param = {
+		.cbs = {.create = {.handle = counter_esp32_create_sleep_retention_cb,
+				   .arg = (void *)dev}},
+		.depends = RETENTION_MODULE_BITMAP_INIT(CLOCK_SYSTEM),
+	};
+
+	esp_err_t err = sleep_retention_module_init(info->module, &init_param);
+
+	if (err == ESP_OK) {
+		err = sleep_retention_module_allocate(info->module);
+	}
+	if (err != ESP_OK) {
+		LOG_WRN("GPTimer sleep retention init failed (%d) group=%u index=%u", err,
+			(unsigned int)cfg->group, (unsigned int)cfg->index);
+	}
+}
+#endif /* COUNTER_SLEEP_RETENTION_ENABLED */
 
 static int counter_esp32_init(const struct device *dev)
 {
@@ -72,41 +125,49 @@ static int counter_esp32_init(const struct device *dev)
 	data->top_data.auto_reload = false;
 	data->top_data.ticks = cfg->counter_info.max_top_value;
 
+	timg_ll_enable_bus_clock(cfg->group, true);
+	timer_ll_enable_clock(cfg->group, cfg->index, true);
+
 	timer_hal_init(&data->hal_ctx, cfg->group, cfg->index);
 	timer_ll_enable_intr(data->hal_ctx.dev, TIMER_LL_EVENT_ALARM(data->hal_ctx.timer_id),
 			     false);
 	timer_ll_clear_intr_status(data->hal_ctx.dev, TIMER_LL_EVENT_ALARM(data->hal_ctx.timer_id));
-	timer_ll_enable_auto_reload(data->hal_ctx.dev, data->hal_ctx.timer_id,
-				    cfg->config.auto_reload);
-	timer_ll_set_clock_source(data->hal_ctx.dev, data->hal_ctx.timer_id,
-				  GPTIMER_CLK_SRC_DEFAULT);
-	timer_ll_set_clock_prescale(data->hal_ctx.dev, data->hal_ctx.timer_id, cfg->config.divider);
-	timer_ll_set_count_direction(data->hal_ctx.dev, data->hal_ctx.timer_id,
-				     cfg->config.counter_dir);
-	timer_ll_enable_alarm(data->hal_ctx.dev, data->hal_ctx.timer_id, cfg->config.alarm_en);
+	timer_ll_enable_auto_reload(data->hal_ctx.dev, data->hal_ctx.timer_id, false);
+#if defined(CONFIG_SOC_SERIES_ESP32P4)
+	esp_clk_tree_enable_src(GPTIMER_CLK_SRC_DEFAULT, true);
+#endif
+	timer_ll_set_clock_source(cfg->group, data->hal_ctx.timer_id, GPTIMER_CLK_SRC_DEFAULT);
+	timer_ll_set_clock_prescale(data->hal_ctx.dev, data->hal_ctx.timer_id, cfg->prescaler);
+	timer_ll_set_count_direction(data->hal_ctx.dev, data->hal_ctx.timer_id, GPTIMER_COUNT_UP);
+	timer_ll_enable_alarm(data->hal_ctx.dev, data->hal_ctx.timer_id, false);
 	timer_ll_set_reload_value(data->hal_ctx.dev, data->hal_ctx.timer_id, 0);
-	timer_ll_enable_counter(data->hal_ctx.dev, data->hal_ctx.timer_id, cfg->config.counter_en);
+	timer_ll_enable_counter(data->hal_ctx.dev, data->hal_ctx.timer_id, true);
 
 	esp_clk_tree_src_get_freq_hz(GPTIMER_CLK_SRC_DEFAULT,
 				     ESP_CLK_TREE_SRC_FREQ_PRECISION_CACHED, &data->clock_src_hz);
 
 	int ret = esp_intr_alloc(cfg->irq_source,
 				 ESP_PRIO_TO_FLAGS(cfg->irq_priority) |
-					 ESP_INT_FLAGS_CHECK(cfg->irq_flags),
+					 ESP_INT_FLAGS_CHECK(cfg->irq_flags) | ESP_INTR_FLAG_IRAM,
 				 (intr_handler_t)counter_esp32_isr, (void *)dev, NULL);
 
 	if (ret != 0) {
 		LOG_ERR("could not allocate interrupt (err %d)", ret);
+		return ret;
 	}
 
-	return ret;
+#if COUNTER_SLEEP_RETENTION_ENABLED
+	counter_esp32_sleep_retention_init(dev);
+#endif
+
+	return 0;
 }
 
 static int counter_esp32_start(const struct device *dev)
 {
 	struct counter_esp32_data *data = dev->data;
 
-	timer_ll_enable_counter(data->hal_ctx.dev, data->hal_ctx.timer_id, TIMER_START);
+	timer_ll_enable_counter(data->hal_ctx.dev, data->hal_ctx.timer_id, true);
 
 	return 0;
 }
@@ -115,7 +176,8 @@ static int counter_esp32_stop(const struct device *dev)
 {
 	struct counter_esp32_data *data = dev->data;
 
-	timer_ll_enable_counter(data->hal_ctx.dev, data->hal_ctx.timer_id, TIMER_PAUSE);
+	timer_ll_enable_counter(data->hal_ctx.dev, data->hal_ctx.timer_id, false);
+	timer_hal_set_counter_value(&data->hal_ctx, 0);
 
 	return 0;
 }
@@ -140,22 +202,26 @@ static int counter_esp32_get_value_64(const struct device *dev, uint64_t *ticks)
 	return 0;
 }
 
-static int counter_esp32_set_alarm(const struct device *dev, uint8_t chan_id,
-				   const struct counter_alarm_cfg *alarm_cfg)
+static int counter_esp32_set_alarm_64(const struct device *dev, uint8_t chan_id,
+				      const struct counter_alarm_cfg_64 *alarm_cfg)
 {
-	ARG_UNUSED(chan_id);
 	struct counter_esp32_data *data = dev->data;
+
+	if (chan_id > 0) {
+		return -ENOTSUP;
+	}
+
 	bool absolute = alarm_cfg->flags & COUNTER_ALARM_CFG_ABSOLUTE;
-	uint32_t ticks = alarm_cfg->ticks;
-	uint32_t top = data->top_data.ticks;
-	uint32_t max_rel_val = data->top_data.ticks;
+	uint64_t ticks = alarm_cfg->ticks;
+	uint64_t top = data->top_data.ticks;
+	uint64_t max_rel_val;
 	uint64_t now;
 	uint64_t target;
-	uint32_t diff;
+	uint64_t diff;
 	int err = 0;
-	bool irq_on_late = 0;
+	bool irq_on_late = false;
 
-	if (ticks > data->top_data.ticks) {
+	if (ticks > top) {
 		return -EINVAL;
 	}
 
@@ -164,38 +230,40 @@ static int counter_esp32_set_alarm(const struct device *dev, uint8_t chan_id,
 
 	counter_esp32_get_value_64(dev, &now);
 
-	if (absolute == 0) {
-		target = now + ticks;
-	} else {
+	if (absolute) {
 		irq_on_late = alarm_cfg->flags & COUNTER_ALARM_CFG_EXPIRE_WHEN_LATE;
 		max_rel_val = top - data->top_data.guard_period;
-		target = (now & ~0xFFFFFFFFULL) | ticks;
-		if (target < now) {
-			target += (1ULL << 32);
+		if (top == UINT64_MAX) {
+			diff = ticks - now - 1;
+		} else {
+			diff = (ticks - now - 1) % (top + 1);
 		}
+		target = now + diff + 1;
+	} else {
+		max_rel_val = top;
+		diff = ticks;
+		target = now + ticks;
 	}
 
-	timer_ll_set_alarm_value(data->hal_ctx.dev, data->hal_ctx.timer_id, target);
-
-	diff = (alarm_cfg->ticks - (uint32_t)now);
 	if (diff > max_rel_val) {
 		if (absolute) {
 			err = -ETIME;
 		}
 		if (irq_on_late) {
+			counter_esp32_get_value_64(dev, &now);
+			timer_ll_set_alarm_value(data->hal_ctx.dev, data->hal_ctx.timer_id,
+						 now + 1);
 			timer_ll_enable_intr(data->hal_ctx.dev,
 					     TIMER_LL_EVENT_ALARM(data->hal_ctx.timer_id), true);
-			timer_ll_enable_alarm(data->hal_ctx.dev, data->hal_ctx.timer_id,
-					      TIMER_ALARM_EN);
-			timer_ll_set_alarm_value(data->hal_ctx.dev, data->hal_ctx.timer_id, 0);
-
+			timer_ll_enable_alarm(data->hal_ctx.dev, data->hal_ctx.timer_id, true);
 		} else {
 			data->alarm_cfg.callback = NULL;
 		}
 	} else {
+		timer_ll_set_alarm_value(data->hal_ctx.dev, data->hal_ctx.timer_id, target);
 		timer_ll_enable_intr(data->hal_ctx.dev,
 				     TIMER_LL_EVENT_ALARM(data->hal_ctx.timer_id), true);
-		timer_ll_enable_alarm(data->hal_ctx.dev, data->hal_ctx.timer_id, TIMER_ALARM_EN);
+		timer_ll_enable_alarm(data->hal_ctx.dev, data->hal_ctx.timer_id, true);
 	}
 
 	return err;
@@ -207,7 +275,7 @@ static int counter_esp32_cancel_alarm(const struct device *dev, uint8_t chan_id)
 	struct counter_esp32_data *data = dev->data;
 	timer_ll_enable_intr(data->hal_ctx.dev, TIMER_LL_EVENT_ALARM(data->hal_ctx.timer_id),
 			     false);
-	timer_ll_enable_alarm(data->hal_ctx.dev, data->hal_ctx.timer_id, TIMER_ALARM_DIS);
+	timer_ll_enable_alarm(data->hal_ctx.dev, data->hal_ctx.timer_id, false);
 	timer_ll_clear_intr_status(data->hal_ctx.dev, TIMER_LL_EVENT_ALARM(data->hal_ctx.timer_id));
 
 	data->alarm_cfg.callback = NULL;
@@ -216,21 +284,28 @@ static int counter_esp32_cancel_alarm(const struct device *dev, uint8_t chan_id)
 	return 0;
 }
 
-static int counter_esp32_set_top_value(const struct device *dev, const struct counter_top_cfg *cfg)
+static int counter_esp32_set_top_value_64(const struct device *dev,
+					  const struct counter_top_cfg_64 *cfg)
 {
 	const struct counter_esp32_config *config = dev->config;
 	struct counter_esp32_data *data = dev->data;
-	uint32_t now;
+	uint64_t now;
 
 	if (data->alarm_cfg.callback) {
 		return -EBUSY;
 	}
 
+#ifdef CONFIG_COUNTER_64BITS_TICKS
+	if (cfg->ticks > config->counter_info.max_top_value_64) {
+		return -ENOTSUP;
+	}
+#else
 	if (cfg->ticks > config->counter_info.max_top_value) {
 		return -ENOTSUP;
 	}
+#endif /* CONFIG_COUNTER_64BITS_TICKS */
 
-	counter_esp32_get_value(dev, &now);
+	counter_esp32_get_value_64(dev, &now);
 
 	if (!(cfg->flags & COUNTER_TOP_CFG_DONT_RESET)) {
 		timer_hal_set_counter_value(&data->hal_ctx, 0);
@@ -252,10 +327,10 @@ static int counter_esp32_set_top_value(const struct device *dev, const struct co
 	timer_ll_clear_intr_status(data->hal_ctx.dev, TIMER_LL_EVENT_ALARM(data->hal_ctx.timer_id));
 	timer_ll_set_alarm_value(data->hal_ctx.dev, data->hal_ctx.timer_id, cfg->ticks);
 	timer_ll_enable_intr(data->hal_ctx.dev, TIMER_LL_EVENT_ALARM(data->hal_ctx.timer_id), true);
-	timer_ll_enable_alarm(data->hal_ctx.dev, data->hal_ctx.timer_id, TIMER_ALARM_EN);
+	timer_ll_enable_alarm(data->hal_ctx.dev, data->hal_ctx.timer_id, true);
 
 	timer_ll_enable_auto_reload(data->hal_ctx.dev, data->hal_ctx.timer_id,
-				    cfg->callback ? TIMER_AUTORELOAD_EN : TIMER_AUTORELOAD_DIS);
+				    cfg->callback ? true : false);
 
 	return 0;
 }
@@ -267,19 +342,21 @@ static uint32_t counter_esp32_get_pending_int(const struct device *dev)
 	return timer_ll_get_intr_status(data->hal_ctx.dev);
 }
 
-static uint32_t counter_esp32_get_top_value(const struct device *dev)
+#ifdef CONFIG_COUNTER_64BITS_TICKS
+static uint64_t counter_esp32_get_top_value_64(const struct device *dev)
 {
 	struct counter_esp32_data *data = dev->data;
 
 	return data->top_data.ticks;
 }
+#endif /* CONFIG_COUNTER_64BITS_TICKS */
 
 uint32_t counter_esp32_get_freq(const struct device *dev)
 {
 	const struct counter_esp32_config *config = dev->config;
 	struct counter_esp32_data *data = dev->data;
 
-	return data->clock_src_hz / config->config.divider;
+	return data->clock_src_hz / config->prescaler;
 }
 
 static int counter_esp32_reset(const struct device *dev)
@@ -291,7 +368,8 @@ static int counter_esp32_reset(const struct device *dev)
 	return 0;
 }
 
-static uint32_t counter_esp32_get_guard_period(const struct device *dev, uint32_t flags)
+#ifdef CONFIG_COUNTER_64BITS_TICKS
+static uint64_t counter_esp32_get_guard_period_64(const struct device *dev, uint32_t flags)
 {
 	struct counter_esp32_data *data = dev->data;
 
@@ -300,7 +378,8 @@ static uint32_t counter_esp32_get_guard_period(const struct device *dev, uint32_
 	return data->top_data.guard_period;
 }
 
-static int counter_esp32_set_guard_period(const struct device *dev, uint32_t ticks, uint32_t flags)
+static int counter_esp32_set_guard_period_64(const struct device *dev, uint64_t ticks,
+					     uint32_t flags)
 {
 	struct counter_esp32_data *data = dev->data;
 
@@ -313,13 +392,83 @@ static int counter_esp32_set_guard_period(const struct device *dev, uint32_t tic
 	data->top_data.guard_period = ticks;
 	return 0;
 }
+#endif /* CONFIG_COUNTER_64BITS_TICKS */
+
+static int counter_esp32_set_top_value(const struct device *dev, const struct counter_top_cfg *cfg)
+{
+	struct counter_top_cfg_64 alarm_cfg_64 = {
+		.callback = cfg->callback,
+		.ticks = (uint64_t)cfg->ticks,
+		.user_data = cfg->user_data,
+		.flags = cfg->flags,
+	};
+
+	return counter_esp32_set_top_value_64(dev, &alarm_cfg_64);
+}
+
+static void counter_esp32_callback_32_trampoline(const struct device *dev,
+						 uint8_t chan_id,
+						 uint64_t ticks,
+						 void *user_data)
+{
+	struct counter_esp32_data *data = dev->data;
+
+	/* Safely call the original 32-bit callback */
+	data->alarm_callback_32(dev, chan_id, (uint32_t)ticks, user_data);
+}
+
+static int counter_esp32_set_alarm(const struct device *dev, uint8_t chan_id,
+				   const struct counter_alarm_cfg *alarm_cfg)
+{
+	struct counter_esp32_data *data = dev->data;
+	struct counter_alarm_cfg_64 alarm_cfg_64 = {
+		.callback = counter_esp32_callback_32_trampoline,
+		.ticks = (uint64_t)alarm_cfg->ticks,
+		.user_data = alarm_cfg->user_data,
+		.flags = alarm_cfg->flags,
+	};
+
+	/* use trampoline function to handle the function pointer type difference */
+	data->alarm_callback_32 = alarm_cfg->callback;
+
+	return counter_esp32_set_alarm_64(dev, chan_id, &alarm_cfg_64);
+}
+
+static uint32_t counter_esp32_get_top_value(const struct device *dev)
+{
+	struct counter_esp32_data *data = dev->data;
+
+	return (uint32_t)data->top_data.ticks;
+}
+
+static uint32_t counter_esp32_get_guard_period(const struct device *dev, uint32_t flags)
+{
+	struct counter_esp32_data *data = dev->data;
+
+	ARG_UNUSED(flags);
+
+	return (uint32_t)data->top_data.guard_period;
+}
+
+static int counter_esp32_set_guard_period(const struct device *dev, uint32_t ticks, uint32_t flags)
+{
+	struct counter_esp32_data *data = dev->data;
+
+	ARG_UNUSED(flags);
+
+	if (ticks > data->top_data.ticks) {
+		return -EINVAL;
+	}
+
+	data->top_data.guard_period = (uint64_t)ticks;
+	return 0;
+}
 
 static DEVICE_API(counter, counter_api) = {
 	.start = counter_esp32_start,
 	.stop = counter_esp32_stop,
 	.get_value = counter_esp32_get_value,
 	.reset = counter_esp32_reset,
-	.get_value_64 = counter_esp32_get_value_64,
 	.set_alarm = counter_esp32_set_alarm,
 	.cancel_alarm = counter_esp32_cancel_alarm,
 	.set_top_value = counter_esp32_set_top_value,
@@ -328,22 +477,38 @@ static DEVICE_API(counter, counter_api) = {
 	.get_freq = counter_esp32_get_freq,
 	.get_guard_period = counter_esp32_get_guard_period,
 	.set_guard_period = counter_esp32_set_guard_period,
+#ifdef CONFIG_COUNTER_64BITS_TICKS
+	.get_value_64 = counter_esp32_get_value_64,
+	.set_alarm_64 = counter_esp32_set_alarm_64,
+	.set_top_value_64 = counter_esp32_set_top_value_64,
+	.get_top_value_64 = counter_esp32_get_top_value_64,
+	.get_guard_period_64 = counter_esp32_get_guard_period_64,
+	.set_guard_period_64 = counter_esp32_set_guard_period_64,
+#endif /* CONFIG_COUNTER_64BITS_TICKS */
 };
 
-static void counter_esp32_isr(void *arg)
+static void IRAM_ATTR counter_esp32_isr(void *arg)
 {
 	const struct device *dev = (const struct device *)arg;
 	struct counter_esp32_data *data = dev->data;
-	counter_alarm_callback_t cb = data->alarm_cfg.callback;
+	counter_alarm_callback_64_t cb = data->alarm_cfg.callback;
 	void *cb_data = data->alarm_cfg.user_data;
-	uint32_t now;
+	uint64_t now;
 
-	counter_esp32_get_value(dev, &now);
+	uint32_t intr_status = timer_ll_get_intr_status(data->hal_ctx.dev);
+
+	if (!(intr_status & TIMER_LL_EVENT_ALARM(data->hal_ctx.timer_id))) {
+		return;
+	}
+
+	timer_ll_clear_intr_status(data->hal_ctx.dev, TIMER_LL_EVENT_ALARM(data->hal_ctx.timer_id));
+
+	counter_esp32_get_value_64(dev, &now);
 
 	if (cb) {
 		timer_ll_enable_intr(data->hal_ctx.dev,
 				     TIMER_LL_EVENT_ALARM(data->hal_ctx.timer_id), false);
-		timer_ll_enable_alarm(data->hal_ctx.dev, data->hal_ctx.timer_id, TIMER_ALARM_DIS);
+		timer_ll_enable_alarm(data->hal_ctx.dev, data->hal_ctx.timer_id, false);
 		data->alarm_cfg.callback = NULL;
 		data->alarm_cfg.user_data = NULL;
 		cb(dev, 0, now, cb_data);
@@ -354,12 +519,9 @@ static void counter_esp32_isr(void *arg)
 		if (data->top_data.auto_reload) {
 			timer_ll_enable_intr(data->hal_ctx.dev,
 					     TIMER_LL_EVENT_ALARM(data->hal_ctx.timer_id), true);
-			timer_ll_enable_alarm(data->hal_ctx.dev, data->hal_ctx.timer_id,
-					      TIMER_ALARM_EN);
+			timer_ll_enable_alarm(data->hal_ctx.dev, data->hal_ctx.timer_id, true);
 		}
 	}
-
-	timer_ll_clear_intr_status(data->hal_ctx.dev, TIMER_LL_EVENT_ALARM(data->hal_ctx.timer_id));
 }
 
 #define TIMER(idx)              DT_INST_PARENT(idx)
@@ -374,25 +536,19 @@ static void counter_esp32_isr(void *arg)
 	static struct counter_esp32_data counter_data_##idx;                                       \
                                                                                                    \
 	static const struct counter_esp32_config counter_config_##idx = {                          \
-		.counter_info = {.max_top_value = UINT32_MAX,                                      \
-				 .flags = COUNTER_CONFIG_INFO_COUNT_UP,                            \
-				 .channels = 1},                                                   \
-		.config =                                                                          \
-			{                                                                          \
-				.alarm_en = TIMER_ALARM_DIS,                                       \
-				.counter_en = TIMER_START,                                         \
-				.intr_type = TIMER_INTR_LEVEL,                                     \
-				.counter_dir = TIMER_COUNT_UP,                                     \
-				.auto_reload = TIMER_AUTORELOAD_DIS,                               \
-				.divider = ESP32_COUNTER_GET_CLK_DIV(idx),                         \
-			},                                                                         \
-		.clock_dev = DEVICE_DT_GET(DT_CLOCKS_CTLR(TIMER(idx))),                            \
-		.clock_subsys = (clock_control_subsys_t)DT_CLOCKS_CELL(TIMER(idx), offset),        \
-		.group = DT_PROP(TIMER(idx), group),                                               \
-		.index = DT_PROP(TIMER(idx), index),                                               \
-		.irq_source = DT_IRQ_BY_IDX(TIMER(idx), 0, irq),                                   \
-		.irq_priority = DT_IRQ_BY_IDX(TIMER(idx), 0, priority),                            \
-		.irq_flags = DT_IRQ_BY_IDX(TIMER(idx), 0, flags)};                                 \
+		.counter_info = {COND_CODE_1(CONFIG_COUNTER_64BITS_TICKS,                          \
+					(.max_top_value_64 = UINT64_MAX,),                         \
+					(.max_top_value = UINT32_MAX,)) .flags =        \
+							      COUNTER_CONFIG_INFO_COUNT_UP,        \
+						     .channels = 1},                               \
+			.clock_dev = DEVICE_DT_GET(DT_CLOCKS_CTLR(TIMER(idx))),                    \
+			.clock_subsys =                                                            \
+				(clock_control_subsys_t)DT_CLOCKS_CELL(TIMER(idx), offset),        \
+			.group = DT_PROP(TIMER(idx), group), .index = DT_PROP(TIMER(idx), index),  \
+			.prescaler = ESP32_COUNTER_GET_CLK_DIV(idx),                               \
+			.irq_source = DT_IRQ_BY_IDX(TIMER(idx), 0, irq),                           \
+			.irq_priority = DT_IRQ_BY_IDX(TIMER(idx), 0, priority),                    \
+			.irq_flags = DT_IRQ_BY_IDX(TIMER(idx), 0, flags)};                         \
                                                                                                    \
 	DEVICE_DT_INST_DEFINE(idx, counter_esp32_init, NULL, &counter_data_##idx,                  \
 			      &counter_config_##idx, PRE_KERNEL_1, CONFIG_COUNTER_INIT_PRIORITY,   \

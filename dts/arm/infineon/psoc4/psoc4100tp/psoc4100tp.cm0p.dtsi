@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2025 Infineon Technologies AG,
- * or an affiliate of Infineon Technologies AG.
+ * SPDX-FileCopyrightText: <text>Copyright (c) 2026 Infineon Technologies AG,
+ * or an affiliate of Infineon Technologies AG. All rights reserved.</text>
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -28,7 +28,7 @@
 
 		/* Pinctrl node for Infineon PSOC4 SoC */
 		pinctrl0: pinctrl@40310000 {
-			compatible = "infineon,cat1-pinctrl";
+			compatible = "infineon,pinctrl";
 			reg = <0x40310000 0x1000>;
 			status = "okay";
 		};

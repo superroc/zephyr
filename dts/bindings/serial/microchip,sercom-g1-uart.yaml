@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Microchip Technology Inc.
+# Copyright (c) 2025-2026 Microchip Technology Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 title: Microchip SERCOM UART controller
@@ -93,3 +93,21 @@ properties:
          ONDEMAND bits are set in the clocking chain.
       1: Wake on Receive Complete interrupt. Generic clock is enabled in all sleep modes.
          Any interrupt can wake up the device.
+
+  dmas:
+    description: |
+      Optional TX & RX dma specifiers.
+
+      Each specifier will have a phandle reference to the dmac controller,
+      the channel number, and peripheral trigger source.
+
+      For example dmas for TX, RX on SERCOM3
+         dmas = <&dmac 0 0xb>, <&dmac 0 0xa>;
+
+  dma-names:
+    description: |
+      Required if the dmas property exists.  This should be "rx" and "tx"
+      to match the dmas property.
+
+      For example
+         dma-names = "rx", "tx";

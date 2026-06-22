@@ -319,6 +319,39 @@ Here are more details on the peripherals that are currently provided with this b
       (eg. USB to UART dongles). For more information refer to the section
       `TTY UART`_.
 
+**Digital microphone (DMIC)**
+  A file-backed DMIC driver is available for native_sim. It reads PCM sample
+  data from a binary file on the host file system and presents it through the
+  Zephyr DMIC API, which is useful for testing audio capture pipelines.
+
+  By default the input file path is taken from
+  :kconfig:option:`CONFIG_AUDIO_DMIC_NATIVE_SIM_FILE_PATH`. Each DMIC instance
+  exposes its own command line override in the form
+  ``--<device>_file=<path>``. For the default native_sim instance this is
+  ``--dmic0_file=<path>``.
+
+  If the configured host input file does not exist, the driver prints a warning
+  from the native simulator runner side and provides zeroes (silence).
+
+**Inter-IC sound (I2S)**
+  A file-backed I2S driver is which can be configured
+  for RX, TX, or both directions. It reads or writes PCM sample data from
+  or to files on the host file system through the Zephyr I2S API. This is
+  useful for testing stream handling and loopback scenarios.
+
+  By default the RX and TX file paths are taken from
+  :kconfig:option:`CONFIG_I2S_NATIVE_SIM_RX_FILE_PATH` and
+  :kconfig:option:`CONFIG_I2S_NATIVE_SIM_TX_FILE_PATH`. Each I2S instance
+  exposes its own command line overrides in the form of
+  ``--<device>_rx=<path>`` and ``--<device>_tx=<path>``. For example, the
+  default bidirectional native_sim instance uses ``--i2s_rxtx_rx=<path>`` and
+  ``--i2s_rxtx_tx=<path>``.
+
+  If an RX input file cannot be opened, the driver prints a warning from the
+  native simulator runner side and feeds silence for that stream run. If a TX
+  output file cannot be opened, the driver prints a warning and discards TX
+  data for that stream run.
+
 **Real time clock**
   The real time clock model provides a model of a constantly powered clock.
   By default this is initialized to the host time at boot.
@@ -510,6 +543,26 @@ Here are more details on the peripherals that are currently provided with this b
 
   SocketCAN support can be enabled by using the :ref:`snippet-socketcan-native-sim`.
 
+**LED device**
+  Implements a Zephyr LED device backed by a Linux LED. You configure which
+  Linux LED to use by setting the DT ``path`` property to the name of the LED
+  as it shows in ``/sys/class/leds``.
+
+  .. code-block:: dts
+
+      leds {
+        compatible = "zephyr,native-linux-leds";
+
+        led0: led_0 {
+          /* /sys/class/leds/tpacpi::lid_logo_dot/brightness */
+          path = "tpacpi::lid_logo_dot";
+        };
+        led1: led_1 {
+          /* /sys/class/leds/tpacpi::power/brightness */
+          path = "tpacpi::power";
+        };
+      };
+
 .. _native_ptty_uart:
 
 PTY UART
@@ -682,24 +735,43 @@ crashes, you can cleanup the stale mount point by using the program
    $ fusermount -u flash
 
 You can chose to use the v2 FUSE host library or the v3 with
-:kconfig:option:`CONFIG_FUSE_LIBRARY_VERSION`.
+:kconfig:option:`CONFIG_FUSE_LIBRARY_VERSION`. By default v3 is selected.
 When using the v2, a minimal version of 2.6 is necessary. For v3, 3.0 should suffice.
 You will also need ``pkg-config`` setup to correctly pickup the FUSE install path and compiler flags.
 Note that using this feature with the 32-bit native_sim variant requires the 32-bit version of the
 corresponding FUSE library.
 
-For example, to use the v2 of the library, on a Ubuntu 24.04 host system, install the ``pkg-config``
-and ``libfuse-dev:i386`` for 32-bit builds, and ``libfuse-dev`` for 64-bit builds:
+For example, to use the v3 of the library, on a Ubuntu 24.04 host system, install the ``pkg-config``
+and ``libfuse3-dev:i386`` for 32-bit builds, and ``libfuse3-dev`` for 64-bit builds:
 
 .. code-block:: console
 
    $ sudo dpkg --add-architecture i386
    $ sudo apt update
-   $ sudo apt-get install pkg-config libfuse-dev:i386 libfuse-dev
+   $ sudo apt-get install pkg-config libfuse3-dev:i386 libfuse3-dev
    $ export PKG_CONFIG_PATH=/usr/lib/i386-linux-gnu/pkgconfig
 
-Similarly ``libfuse3-dev:i386`` and ``libfuse3-dev`` provide the 32 and 64-bit FUSE v3 library
+Similarly ``libfuse-dev:i386`` and ``libfuse-dev`` provide the 32 and 64-bit FUSE v2 library
 and headers.
+
+.. _native_mount_fs:
+
+Host filesystem mount
+*********************
+
+Enabling :kconfig:option:`CONFIG_FILE_SYSTEM_NATIVE_MOUNT` allows mounting a path from the host
+filesystem into Zephyr's filesystem hierarchy. This allows Zephyr to access, and modify, host files
+and folders like any other embedded mount point.
+
+To mount a host directory, pass the ``-volume`` option to the executable on the command line:
+
+.. code-block:: console
+
+   $ zephyr.exe -volume=/host/dir:/zephyr/dir
+
+The option follows Docker volume mount syntax: ``HOST-DIR:ZEPHYR-DIR[:ro]``. An optional ``:ro``
+suffix mounts the volume as read-only. The option can be provided multiple times to mount several
+host directories.
 
 .. _native_sim_peripherals_c_compat:
 
@@ -722,6 +794,7 @@ host libC (:kconfig:option:`CONFIG_EXTERNAL_LIBC`):
      EEPROM, EEPROM emulator, :kconfig:option:`CONFIG_EEPROM_EMULATOR`, All
      Ethernet, :ref:`Eth native_tap <nsim_per_ethe>`, :kconfig:option:`CONFIG_ETH_NATIVE_TAP`, All
      Flash, :ref:`Flash simulator <nsim_per_flash_simu>`, :kconfig:option:`CONFIG_FLASH_SIMULATOR`, All
+     File System, :ref:`Host filesystem mount <native_mount_fs>`, :kconfig:option:`CONFIG_FILE_SYSTEM_NATIVE_MOUNT`, All
      FUSE, :ref:`Host based filesystem access <native_fuse_flash>`, :kconfig:option:`CONFIG_FUSE_FS_ACCESS`, All
      GPIO, GPIO emulator, :kconfig:option:`CONFIG_GPIO_EMUL`, All
      GPIO, SDL GPIO emulator, :kconfig:option:`CONFIG_GPIO_EMUL_SDL`, All

@@ -29,19 +29,21 @@
 #define TEST_AREA_DEV_NODE DT_INST(0, renesas_rz_qspi_xspi)
 #elif defined(CONFIG_FLASH_RENESAS_RZ_QSPI_SPIBSC)
 #define TEST_AREA_DEV_NODE DT_INST(0, renesas_rz_qspi_spibsc)
+#elif defined(CONFIG_FLASH_RENESAS_RZA2M_QSPI_SPIBSC)
+#define TEST_AREA_DEV_NODE DT_INST(0, renesas_rza2m_qspi_spibsc)
 #else
 #define TEST_AREA	storage_partition
 #endif
 
-/* TEST_AREA is only defined for configurations that realy on
+/* TEST_AREA is only defined for configurations that rely on
  * fixed-partition nodes.
  */
 #ifdef TEST_AREA
 
-#define TEST_AREA_OFFSET	FIXED_PARTITION_OFFSET(TEST_AREA)
-#define TEST_AREA_SIZE		FIXED_PARTITION_SIZE(TEST_AREA)
+#define TEST_AREA_OFFSET	PARTITION_OFFSET(TEST_AREA)
+#define TEST_AREA_SIZE		PARTITION_SIZE(TEST_AREA)
 #define TEST_AREA_MAX		(TEST_AREA_OFFSET + TEST_AREA_SIZE)
-#define TEST_AREA_DEVICE	FIXED_PARTITION_DEVICE(TEST_AREA)
+#define TEST_AREA_DEVICE	PARTITION_DEVICE(TEST_AREA)
 
 #elif defined(TEST_AREA_DEV_NODE)
 
@@ -64,7 +66,7 @@
 #error "Unsupported configuration"
 #endif
 
-#define EXPECTED_SIZE	512
+#define EXPECTED_SIZE	MAX(256, CONFIG_FLASH_FILL_BUFFER_SIZE)
 
 #if !defined(CONFIG_FLASH_HAS_EXPLICIT_ERASE) &&		\
 	!defined(CONFIG_FLASH_HAS_NO_EXPLICIT_ERASE)
@@ -250,7 +252,7 @@ ZTEST(flash_driver, test_flash_fill)
 			break;
 		}
 	}
-	zassert_equal(i, EXPECTED_SIZE, "Expected device to be filled wth 0xaa");
+	zassert_equal(i, EXPECTED_SIZE, "Expected device to be filled with 0xaa");
 }
 
 ZTEST(flash_driver, test_flash_flatten)
@@ -282,7 +284,7 @@ ZTEST(flash_driver, test_flash_flatten)
 			break;
 		}
 	}
-	zassert_equal(i, EXPECTED_SIZE, "Expected device to be filled wth 0xaa");
+	zassert_equal(i, EXPECTED_SIZE, "Expected device to be filled with 0xaa");
 }
 
 ZTEST(flash_driver, test_flash_erase)
@@ -460,7 +462,7 @@ ZTEST(flash_driver, test_flash_page_layout)
 		     "page_count = %zu not equal to pages counted with cb = %zu", page_count,
 		     test_cb_data.page_counter);
 
-	/* Test that callback can cancell iteration */
+	/* Test that callback can cancel iteration */
 	test_cb_data.page_counter = 0;
 	test_cb_data.exit_page = page_count >> 1;
 	flash_page_foreach(flash_dev, flash_callback, &test_cb_data);

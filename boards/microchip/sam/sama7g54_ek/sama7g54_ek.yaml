@@ -10,11 +10,14 @@ toolchain:
 ram: 128
 supported:
   - can
+  - counter
   - crypto
   - dma
   - entropy
+  - hwinfo
   - pwm
+  - rtc
   - sdhc
-  - shell
+  - spi
   - uart
 vendor: microchip

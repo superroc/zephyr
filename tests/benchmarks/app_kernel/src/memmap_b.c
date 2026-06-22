@@ -27,7 +27,7 @@ void memorymap_test(void)
 		alloc_status = k_mem_slab_alloc(&MAP1, &p, K_FOREVER);
 		if (alloc_status != 0) {
 			PRINT_F(FORMAT,
-				"Error: Slab allocation failed.", (int64_t)alloc_status);
+				"Error: Slab allocation failed.", (uint64_t)alloc_status);
 			break;
 		}
 		k_mem_slab_free(&MAP1, p);
@@ -36,5 +36,5 @@ void memorymap_test(void)
 	et = timing_cycles_get(&start, &end);
 
 	PRINT_F(FORMAT, "average alloc and dealloc memory page",
-		timing_cycles_to_ns_avg(et, (2 * NR_OF_MAP_RUNS)));
+		test_timing_cycles_to_ns_avg(et, (2 * NR_OF_MAP_RUNS)));
 }

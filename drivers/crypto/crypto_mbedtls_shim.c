@@ -15,12 +15,6 @@
 #include <errno.h>
 #include <zephyr/crypto/crypto.h>
 
-#if !defined(CONFIG_MBEDTLS_CFG_FILE)
-#include "mbedtls/config.h"
-#else
-#include CONFIG_MBEDTLS_CFG_FILE
-#endif /* CONFIG_MBEDTLS_CFG_FILE */
-
 #include <psa/crypto.h>
 
 #define MBEDTLS_SUPPORT (CAP_RAW_KEY | CAP_SEPARATE_IO_BUFS | CAP_SYNC_OPS | \
@@ -28,7 +22,7 @@
 
 #define LOG_LEVEL CONFIG_CRYPTO_LOG_LEVEL
 #include <zephyr/logging/log.h>
-LOG_MODULE_REGISTER(mbedtls);
+LOG_MODULE_REGISTER(mbedtls_shim);
 
 struct mbedtls_shim_session {
 	union {
@@ -45,12 +39,6 @@ struct mbedtls_shim_session {
 struct mbedtls_shim_session mbedtls_sessions[CRYPTO_MAX_SESSION];
 
 static K_MUTEX_DEFINE(mbedtls_sessions_lock);
-
-#if defined(MBEDTLS_MEMORY_BUFFER_ALLOC_C)
-#include "mbedtls/memory_buffer_alloc.h"
-#else
-#error "You need to define MBEDTLS_MEMORY_BUFFER_ALLOC_C"
-#endif /* MBEDTLS_MEMORY_BUFFER_ALLOC_C */
 
 static struct mbedtls_shim_session *mbedtls_get_unused_session(void)
 {
@@ -84,6 +72,7 @@ static int mbedtls_ecb(struct cipher_ctx *ctx, struct cipher_pkt *pkt)
 {
 	struct mbedtls_shim_session *session = ctx->drv_sessn_state;
 	psa_status_t status;
+	size_t out_len;
 
 	/* For security reasons, ECB mode should not be used to encrypt/decrypt
 	 * more than one block. Use CBC mode instead.
@@ -97,13 +86,15 @@ static int mbedtls_ecb(struct cipher_ctx *ctx, struct cipher_pkt *pkt)
 		status = psa_cipher_encrypt(session->key_id, session->psa_alg,
 					    pkt->in_buf, pkt->in_len,
 					    pkt->out_buf, pkt->out_buf_max,
-					    (size_t *) &pkt->out_len);
+					    &out_len);
 	} else {
 		status = psa_cipher_decrypt(session->key_id, session->psa_alg,
 					    pkt->in_buf, pkt->in_len,
 					    pkt->out_buf, pkt->out_buf_max,
-					    (size_t *) &pkt->out_len);
+					    &out_len);
 	}
+
+	pkt->out_len = out_len;
 
 	if (status != PSA_SUCCESS) {
 		LOG_ERR("psa_cipher_[en|de]crypt() failed (%d)", status);
