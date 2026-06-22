@@ -179,6 +179,12 @@ manifest:
       path: modules/hal/ethos_u
       groups:
         - hal
+    - name: hal_freqchip
+      revision: 40e7ed767fadb658db961083ab5296877cd06b2a
+      path: modules/hal/freqchip
+      url: https://github.com/superroc/hal_freqchip.git
+      groups:
+        - hal
     - name: hal_gigadevice
       revision: ee0e31302c21b2a465dc303b3ced8c606c2167c8
       path: modules/hal/gigadevice
